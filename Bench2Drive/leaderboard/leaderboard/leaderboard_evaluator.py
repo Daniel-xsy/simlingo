@@ -83,6 +83,26 @@ def get_weather_id(weather_conditions):
             return case.items()[0][1]
     return None
 
+def _setup_debugpy_listener(host: str, port: int, wait_for_client: bool) -> None:
+    """Spin up a debugpy listener so IDEs can attach."""
+    if port <= 0:
+        return
+
+    try:
+        import debugpy  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError(
+            "debugpy attach requested but debugpy is not installed. "
+            "Install it with `pip install debugpy` or disable attach mode."
+        ) from exc
+
+    debugpy.listen((host, port))
+    print(f"[debugpy] Listening for debugger on {host}:{port}", flush=True)
+
+    if wait_for_client:
+        print("[debugpy] Waiting for debugger to attach before continuing...", flush=True)
+        debugpy.wait_for_client()
+
 class LeaderboardEvaluator(object):
     """
     Main class of the Leaderboard. Everything is handled from here,
@@ -553,7 +573,16 @@ def main():
     parser.add_argument("--debug-checkpoint", type=str, default='./live_results.txt',
                         help="Path to checkpoint used for saving live results")
     parser.add_argument("--gpu-rank", type=int, default=0)
+    parser.add_argument("--debugpy-port", type=int, default=0,
+                        help="Start a debugpy server on this port (0 disables attach mode)")
+    parser.add_argument("--debugpy-host", type=str, default="0.0.0.0",
+                        help="Interface debugpy should bind to when attach mode is enabled")
+    parser.add_argument("--debugpy-wait", action="store_true",
+                        help="Block evaluator startup until a debugger attaches")
     arguments = parser.parse_args()
+
+    if arguments.debugpy_port:
+        _setup_debugpy_listener(arguments.debugpy_host, arguments.debugpy_port, arguments.debugpy_wait)
 
     statistics_manager = StatisticsManager(arguments.checkpoint, arguments.debug_checkpoint)
     leaderboard_evaluator = LeaderboardEvaluator(arguments, statistics_manager)
