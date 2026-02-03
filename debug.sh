@@ -3,8 +3,8 @@ set -euo pipefail
 
 # Recreates the single-route job that run_eval_simlingo_local.py launches.
 
-REPO_ROOT="/home/shaoyux/models/simlingo"
-CARLA_ROOT="/home/shaoyux/software/carla0915"
+REPO_ROOT="/home/nvidia/vla-project/simlingo"
+CARLA_ROOT="/home/nvidia/software/carla0915"
 SCENARIO_RUNNER_ROOT="${REPO_ROOT}/Bench2Drive/scenario_runner"
 LEADERBOARD_ROOT="${REPO_ROOT}/Bench2Drive/leaderboard"
 

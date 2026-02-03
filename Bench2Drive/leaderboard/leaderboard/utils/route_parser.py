@@ -113,6 +113,9 @@ class RouteParser(object):
             route_config.town = route.attrib['town']
             route_config.name = "RouteScenario_{}".format(route_id)
             route_config.weather = RouteParser.parse_weather(route)
+            
+            # Parse disable_bg_vehicle attribute (for language benchmark)
+            route_config.disable_bg_vehicle = route.attrib.get('disable_bg_vehicle', 'false').lower() == 'true'
 
             # The list of carla.Location that serve as keypoints on this route
             positions = []

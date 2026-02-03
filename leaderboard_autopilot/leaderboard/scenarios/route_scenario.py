@@ -204,6 +204,10 @@ class RouteScenario(BasicScenario):
 
     def spawn_parked_vehicles(self, ego_vehicle, max_scenario_distance=10):
         """Spawn parked vehicles."""
+        # Skip spawning parked vehicles if background vehicles are disabled
+        if getattr(self.config, 'disable_bg_vehicle', False):
+            return
+        
         def is_close(slot_location, ego_location):
             return slot_location.distance(ego_location) < self.PARKED_VEHICLES_INIT_THRESHOLD
         def is_free(slot_location):

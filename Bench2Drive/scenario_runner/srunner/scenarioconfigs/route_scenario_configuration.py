@@ -50,3 +50,4 @@ class RouteScenarioConfiguration(ScenarioConfiguration):
         super(RouteScenarioConfiguration, self).__init__()
         self.keypoints = None
         self.scenario_configs = []
+        self.disable_bg_vehicle = False  # If True, disable background traffic
