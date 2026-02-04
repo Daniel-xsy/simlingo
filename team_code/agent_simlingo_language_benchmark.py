@@ -13,7 +13,7 @@ import math
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from enum import Enum
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 
 import carla
 import numpy as np
@@ -87,8 +87,12 @@ class LanguageBenchmarkAgent(LingoAgent):
         self.distance_traveled = 0.0
         self.last_location: Optional[carla.Location] = None
         self.start_time: Optional[float] = None
+        self._latest_game_time: Optional[float] = None
         self.benchmark_type = ""
         self.benchmark_category = ""
+        self.scenario_var_by_name: Dict[str, str] = {}
+        self.scenario_trigger_points: Dict[str, carla.Location] = {}
+        self._scenario_defs: List[Tuple[str, Optional[carla.Location]]] = []
         
         # Parse the route file for instructions
         self._parse_language_benchmark()
@@ -132,11 +136,45 @@ class LanguageBenchmarkAgent(LingoAgent):
             
             # Sort by ID to ensure correct order
             self.instructions.sort(key=lambda x: x.id)
+
+            # Parse scenarios for scenario-triggered instructions
+            scenarios_elem = route.find('scenarios')
+            if scenarios_elem is not None:
+                self._parse_scenarios(scenarios_elem)
             
         except Exception as e:
             print(f"[LanguageBenchmarkAgent] Error parsing XML: {e}")
             import traceback
             traceback.print_exc()
+
+    def _parse_scenarios(self, scenarios_elem: ET.Element):
+        """Parse scenario definitions for scenario_active triggers"""
+        self.scenario_var_by_name = {}
+        self.scenario_trigger_points = {}
+        self._scenario_defs = []
+
+        scenario_index = 0
+        for scenario_elem in scenarios_elem.findall('scenario'):
+            scenario_name = scenario_elem.attrib.get('name', f"scenario_{scenario_index}")
+            trigger_point_elem = scenario_elem.find('trigger_point')
+
+            trigger_location = None
+            if trigger_point_elem is not None:
+                try:
+                    trigger_location = carla.Location(
+                        x=float(trigger_point_elem.attrib.get('x', 0)),
+                        y=float(trigger_point_elem.attrib.get('y', 0)),
+                        z=float(trigger_point_elem.attrib.get('z', 0))
+                    )
+                except Exception:
+                    trigger_location = None
+
+            self._scenario_defs.append((scenario_name, trigger_location))
+            self.scenario_var_by_name[scenario_name] = f"ScenarioRouteNumber{scenario_index}"
+            if trigger_location is not None:
+                self.scenario_trigger_points[scenario_name] = trigger_location
+
+            scenario_index += 1
     
     def _parse_instruction(self, elem: ET.Element) -> Optional[Instruction]:
         """Parse a single instruction element"""
@@ -238,6 +276,9 @@ class LanguageBenchmarkAgent(LingoAgent):
                 if self.start_time is not None:
                     elapsed = game_time - self.start_time
                     is_triggered = elapsed >= trigger.value
+
+            elif trigger.trigger_type == TriggerType.SCENARIO_ACTIVE:
+                is_triggered = self._is_scenario_active(trigger, current_location)
             
             # Check duration constraints
             if is_triggered:
@@ -256,6 +297,68 @@ class LanguageBenchmarkAgent(LingoAgent):
                 active_instruction = instruction
         
         return active_instruction
+
+    def _is_scenario_active(self, trigger: InstructionTrigger, ego_location: carla.Location) -> bool:
+        """Check if a scenario is currently active (via blackboard or actor presence)."""
+        scenario_name = trigger.scenario_name
+        if not scenario_name:
+            return False
+
+        # Prefer the blackboard variable set by ScenarioTriggerer
+        var_name = None
+        if scenario_name.startswith("ScenarioRouteNumber"):
+            var_name = scenario_name
+        else:
+            var_name = self.scenario_var_by_name.get(scenario_name)
+
+        if var_name:
+            try:
+                import py_trees
+                blackboard = py_trees.blackboard.Blackboard()
+                value = blackboard.get(var_name)
+                if bool(value):
+                    return True
+            except Exception:
+                pass
+
+        # Fallback: detect scenario actor activation (best effort)
+        try:
+            from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
+            world = CarlaDataProvider.get_world()
+        except Exception:
+            world = None
+
+        if world is None:
+            return False
+
+        actors = world.get_actors().filter("vehicle.*")
+        if not actors:
+            return False
+
+        trigger_location = self.scenario_trigger_points.get(scenario_name)
+        max_distance = trigger.value if trigger.value > 0 else 30.0
+
+        for actor in actors:
+            role_name = actor.attributes.get("role_name", "")
+            if role_name != "scenario":
+                continue
+
+            actor_location = actor.get_location()
+            if actor_location is None:
+                continue
+
+            # Ignore actors still hidden below ground
+            if actor_location.z < -10.0:
+                continue
+
+            if trigger_location is not None:
+                if actor_location.distance(trigger_location) <= max_distance:
+                    return True
+
+            if ego_location is not None and actor_location.distance(ego_location) <= max_distance:
+                return True
+
+        return False
     
     def _get_prompt_for_instruction(self, instruction: Optional[Instruction], 
                                      speed: float) -> str:
@@ -295,9 +398,14 @@ class LanguageBenchmarkAgent(LingoAgent):
         # Update distance traveled
         self._update_distance_traveled(current_location)
         
-        # Get active instruction based on current distance and position
-        # For time-based triggers, we approximate with distance (could enhance with actual time)
-        game_time = self.step * 0.05 if self.step > 0 else 0.0  # Approximate based on 20 FPS
+        # Get active instruction based on current distance, position, and real game time
+        if self._latest_game_time is not None:
+            game_time = self._latest_game_time
+        else:
+            game_time = self.step * self.config.carla_frame_rate if self.step > 0 else 0.0
+
+        if self.start_time is None:
+            self.start_time = game_time
         self.current_instruction = self._get_active_instruction(current_location, game_time)
         
         # Set custom_prompt and user_flag for this instruction
@@ -328,6 +436,9 @@ class LanguageBenchmarkAgent(LingoAgent):
         
         The instruction update and prompt setting happens in tick().
         """
+        # Record latest game time for time-based triggers
+        self._latest_game_time = timestamp
+
         # Call parent run_step (which calls tick internally)
         return super().run_step(input_data, timestamp, sensors)
 
