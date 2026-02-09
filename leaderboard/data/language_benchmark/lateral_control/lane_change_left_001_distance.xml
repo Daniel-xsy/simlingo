@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<routes>
+  <route id="LF_LC_L_001_DISTANCE" town="Town12" benchmark_type="language_following" category="lateral_control" disable_bg_vehicle="true">
+
+    <waypoints>
+      <position x="-497.6" y="3672.9" z="364.9"/>
+      <position x="-497.6" y="3662.9" z="364.7"/>
+      <position x="-497.7" y="3652.9" z="364.6"/>
+      <position x="-497.7" y="3642.9" z="364.4"/>
+      <position x="-497.7" y="3632.9" z="364.2"/>
+      <position x="-497.8" y="3622.9" z="364.1"/>
+      <position x="-497.8" y="3612.9" z="363.9"/>
+      <position x="-497.9" y="3602.9" z="363.8"/>
+      <position x="-497.9" y="3592.9" z="363.6"/>
+      <position x="-497.9" y="3582.9" z="363.5"/>
+      <position x="-498.0" y="3572.9" z="363.4"/>
+      <position x="-498.0" y="3562.9" z="363.3"/>
+      <position x="-498.1" y="3552.9" z="363.1"/>
+      <position x="-498.1" y="3542.9" z="363.1"/>
+    </waypoints>
+
+    <instructions>
+      <instruction id="1" priority="primary">
+        <trigger type="start"/>
+        <text>increase speed to 10m/s</text>
+        <command_id>-1</command_id>
+        <expected_behavior type="target_speed" speed_ms="10" tolerance_ms="1.0"/>
+        <duration_meters>50</duration_meters>
+      </instruction>
+
+      <instruction id="2" priority="primary">
+        <trigger type="distance_traveled" value="50"/>
+        <text>do a lane change to the left</text>
+        <command_id>5</command_id>
+        <expected_behavior type="lane_change" direction="left"/>
+        <duration_meters>60</duration_meters>
+      </instruction>
+
+      <instruction id="3" priority="primary">
+        <trigger type="distance_traveled" value="110"/>
+        <text>follow the road</text>
+        <command_id>4</command_id>
+        <expected_behavior type="lane_follow"/>
+        <duration_meters>-1</duration_meters>
+      </instruction>
+    </instructions>
+
+    <evaluation>
+      <metric type="lane_change_success">
+        <param name="expected_direction" value="left"/>
+        <param name="min_lateral_change_m" value="3.0"/>
+        <param name="max_distance_m" value="50"/>
+      </metric>
+      <metric type="lane_follow_stability">
+        <param name="max_lateral_deviation_m" value="1.0"/>
+        <param name="start_distance_m" value="50"/>
+      </metric>
+      <metric type="collision_check">
+        <param name="expect_collision" value="false"/>
+      </metric>
+    </evaluation>
+
+    <scenarios>
+      <scenario name="FreeRide_1" type="FreeRide">
+        <trigger_point x="-497.6" y="3672.9" yaw="-90.0" z="364.9"/>
+      </scenario>
+    </scenarios>
+
+    <weathers>
+      <weather cloudiness="5.0" fog_density="2.0" precipitation="0.0" precipitation_deposits="0.0" route_percentage="0" sun_altitude_angle="70.0" sun_azimuth_angle="0.0" wetness="0.0" wind_intensity="10.0"/>
+      <weather cloudiness="5.0" fog_density="2.0" precipitation="0.0" precipitation_deposits="0.0" route_percentage="100" sun_altitude_angle="70.0" sun_azimuth_angle="0.0" wetness="0.0" wind_intensity="10.0"/>
+    </weathers>
+
+  </route>
+</routes>
