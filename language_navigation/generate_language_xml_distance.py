@@ -193,6 +193,20 @@ class SelectedNavigationTrigger:
     sampled_text: str
 
 
+@dataclass(frozen=True)
+class RouteSpecialCase:
+    kind: str
+    action_name: str
+    primary_action: str
+    primary_trigger_distance_m: float
+    primary_position: Tuple[float, float, float]
+    primary_phrasing_mode: str
+    secondary_action: Optional[str] = None
+    secondary_trigger_distance_m: Optional[float] = None
+    secondary_position: Optional[Tuple[float, float, float]] = None
+    secondary_phrasing_mode: Optional[str] = None
+
+
 class SpeedLimitMapCache:
     def __init__(self, base_dir: Optional[Path] = None) -> None:
         self._base_dir = (
@@ -492,6 +506,30 @@ def _can_change_lane(ego_waypoint: "carla.Waypoint", direction: str) -> bool:
     return _is_same_direction_lane(ego_waypoint, adjacent)
 
 
+def _same_direction_adjacent_drive_count(ego_waypoint: "carla.Waypoint") -> int:
+    count = 0
+    for direction in ("left", "right"):
+        adjacent = (
+            ego_waypoint.get_left_lane() if direction == "left" else ego_waypoint.get_right_lane()
+        )
+        if adjacent is None:
+            continue
+        if adjacent.lane_type != carla.LaneType.Driving:
+            continue
+        if _is_same_direction_lane(ego_waypoint, adjacent):
+            count += 1
+    return count
+
+
+def _route_cumulative_distances(
+    route_positions: List[Tuple[float, float, float]]
+) -> List[float]:
+    cumulative = [0.0]
+    for idx in range(1, len(route_positions)):
+        cumulative.append(cumulative[-1] + _distance(route_positions[idx - 1], route_positions[idx]))
+    return cumulative
+
+
 def _scan_turn_actions(
     start_waypoint: "carla.Waypoint",
     scan_distance_m: float = 45.0,
@@ -707,7 +745,128 @@ def _first_junction_index(samples: List[RouteActionabilitySample]) -> Optional[i
     return None
 
 
+def _first_sample_index_at_or_after(
+    samples: List[RouteActionabilitySample], distance_m: float
+) -> int:
+    for idx, sample in enumerate(samples):
+        if sample.distance_m >= distance_m:
+            return idx
+    return len(samples) - 1
+
+
+def _infer_exit_side(
+    pre_waypoint: "carla.Waypoint",
+    post_waypoint: "carla.Waypoint",
+) -> str:
+    turn_direction = _compute_turn_category(pre_waypoint, post_waypoint)
+    if turn_direction == "turn_left":
+        return "left"
+    if turn_direction == "turn_right":
+        return "right"
+    if _can_change_lane(pre_waypoint, "right"):
+        return "right"
+    if _can_change_lane(pre_waypoint, "left"):
+        return "left"
+    return "right"
+
+
+def detect_route_special_case(
+    route_positions: List[Tuple[float, float, float]],
+    carla_map: "carla.Map",
+    samples: List[RouteActionabilitySample],
+) -> Optional[RouteSpecialCase]:
+    if len(route_positions) < 2:
+        return None
+
+    cumulative_distances = _route_cumulative_distances(route_positions)
+    route_waypoints: List["carla.Waypoint"] = []
+    for position in route_positions:
+        waypoint = carla_map.get_waypoint(
+            carla.Location(x=position[0], y=position[1], z=position[2]),
+            project_to_road=True,
+            lane_type=carla.LaneType.Driving,
+        )
+        route_waypoints.append(waypoint)
+
+    max_trigger_distance = max(cumulative_distances[-1] - 1.0, 0.0)
+
+    for idx in range(1, len(route_waypoints)):
+        pre_waypoint = route_waypoints[idx - 1]
+        post_waypoint = route_waypoints[idx]
+        if pre_waypoint is None or post_waypoint is None:
+            continue
+        if pre_waypoint.is_junction or post_waypoint.is_junction:
+            continue
+        if (
+            pre_waypoint.road_id == post_waypoint.road_id
+            and pre_waypoint.section_id == post_waypoint.section_id
+            and pre_waypoint.lane_id == post_waypoint.lane_id
+        ):
+            continue
+
+        transition_distance = cumulative_distances[idx]
+        merge_in_pre_count = _same_direction_adjacent_drive_count(pre_waypoint)
+        merge_in_post_count = _same_direction_adjacent_drive_count(post_waypoint)
+
+        if merge_in_pre_count == 0 and merge_in_post_count >= 1:
+            trigger_distance = min(max(transition_distance + 5.0, 5.0), max_trigger_distance)
+            trigger_position = _position_at_distance(route_positions, trigger_distance)
+            if _can_change_lane(post_waypoint, "left"):
+                primary_action = "lane_change_left"
+            elif _can_change_lane(post_waypoint, "right"):
+                primary_action = "lane_change_right"
+            else:
+                primary_action = "lane_follow"
+            return RouteSpecialCase(
+                kind="merge",
+                action_name=f"merge_{primary_action}",
+                primary_action=primary_action,
+                primary_trigger_distance_m=trigger_distance,
+                primary_position=trigger_position,
+                primary_phrasing_mode="approach",
+            )
+
+        if merge_in_pre_count >= 1 and merge_in_post_count == 0:
+            exit_side = _infer_exit_side(pre_waypoint, post_waypoint)
+            prep_action = (
+                f"lane_change_{exit_side}" if _can_change_lane(pre_waypoint, exit_side) else None
+            )
+            exit_trigger_distance = min(max(transition_distance, 5.0), max_trigger_distance)
+            exit_position = _position_at_distance(route_positions, exit_trigger_distance)
+            prep_distance = None
+            prep_position = None
+            if prep_action is not None:
+                prep_distance = min(max(5.0, exit_trigger_distance - 10.0), exit_trigger_distance)
+                prep_position = _position_at_distance(route_positions, prep_distance)
+            return RouteSpecialCase(
+                kind="exit",
+                action_name=f"exit_{exit_side}",
+                primary_action=prep_action or f"exit_{exit_side}",
+                primary_trigger_distance_m=prep_distance or exit_trigger_distance,
+                primary_position=prep_position or exit_position,
+                primary_phrasing_mode="approach",
+                secondary_action=f"exit_{exit_side}" if prep_action is not None else None,
+                secondary_trigger_distance_m=exit_trigger_distance if prep_action is not None else None,
+                secondary_position=exit_position if prep_action is not None else None,
+                secondary_phrasing_mode="approach" if prep_action is not None else None,
+            )
+
+    return None
+
+
 def _navigation_text_variants(category: str, phrasing_mode: str) -> List[str]:
+    if category == "exit_left":
+        return [
+            "take the exit on the left",
+            "exit from the left lane",
+            "leave via the left exit",
+        ]
+    if category == "exit_right":
+        return [
+            "take the exit on the right",
+            "exit from the right lane",
+            "leave via the right exit",
+        ]
     if category == "turn_left":
         if phrasing_mode == "at_junction":
             return [
@@ -1014,6 +1173,14 @@ def _sample_navigation_instruction_for_action(
     action: str,
     phrasing_mode: str,
 ) -> Dict[str, object]:
+    if action in ("exit_left", "exit_right"):
+        direction = "left" if action.endswith("left") else "right"
+        return {
+            "text": rng.choice(_navigation_text_variants(action, phrasing_mode)),
+            "command_id": 1 if direction == "left" else 2,
+            "expected_behavior": {"type": "turn", "direction": direction},
+        }
+
     entry = INSTRUCTION_LIBRARY[action]
     return {
         "text": rng.choice(_navigation_text_variants(action, phrasing_mode)),
@@ -1069,34 +1236,73 @@ def _select_output_actions(
     return selected_actions
 
 
-def _build_two_step_instructions(
+def _build_route_instructions(
     rng: random.Random,
     accelerate_target_speed_ms: int,
-    action: str,
     navigation_trigger: SelectedNavigationTrigger,
+    special_case: Optional[RouteSpecialCase] = None,
+    action: Optional[str] = None,
 ) -> ET.Element:
     instructions_elem = ET.Element("instructions")
     accelerate_template = _build_precise_accelerate_instruction(
         rng, target_speed_ms=accelerate_target_speed_ms
+    )
+    second_trigger_distance = (
+        special_case.primary_trigger_distance_m if special_case is not None else navigation_trigger.distance_m
     )
     _append_instruction(
         instructions_elem,
         instruction_id=1,
         trigger_distance_m=0.0,
         template=accelerate_template,
-        duration_meters=navigation_trigger.distance_m,
+        duration_meters=second_trigger_distance,
     )
 
-    navigation_template = _sample_navigation_instruction_for_action(
-        rng, action=action, phrasing_mode=navigation_trigger.phrasing_mode
+    if special_case is None:
+        if action is None:
+            raise ValueError("Normal route instruction building requires an action.")
+        navigation_template = _sample_navigation_instruction_for_action(
+            rng, action=action, phrasing_mode=navigation_trigger.phrasing_mode
+        )
+        _append_instruction(
+            instructions_elem,
+            instruction_id=2,
+            trigger_distance_m=navigation_trigger.distance_m,
+            template=navigation_template,
+            duration_meters=-1.0,
+        )
+        return instructions_elem
+
+    primary_template = _sample_navigation_instruction_for_action(
+        rng,
+        action=special_case.primary_action,
+        phrasing_mode=special_case.primary_phrasing_mode,
     )
+    primary_duration = -1.0
+    if special_case.secondary_action is not None and special_case.secondary_trigger_distance_m is not None:
+        primary_duration = max(
+            0.0, special_case.secondary_trigger_distance_m - special_case.primary_trigger_distance_m
+        )
     _append_instruction(
         instructions_elem,
         instruction_id=2,
-        trigger_distance_m=navigation_trigger.distance_m,
-        template=navigation_template,
-        duration_meters=-1.0,
+        trigger_distance_m=special_case.primary_trigger_distance_m,
+        template=primary_template,
+        duration_meters=primary_duration,
     )
+    if special_case.secondary_action is not None and special_case.secondary_trigger_distance_m is not None:
+        secondary_template = _sample_navigation_instruction_for_action(
+            rng,
+            action=special_case.secondary_action,
+            phrasing_mode=special_case.secondary_phrasing_mode or "approach",
+        )
+        _append_instruction(
+            instructions_elem,
+            instruction_id=3,
+            trigger_distance_m=special_case.secondary_trigger_distance_m,
+            template=secondary_template,
+            duration_meters=-1.0,
+        )
     return instructions_elem
 
 
@@ -1107,6 +1313,7 @@ def _build_action_route_tree(
     navigation_trigger: SelectedNavigationTrigger,
     accelerate_target_speed_ms: int,
     rng: random.Random,
+    special_case: Optional[RouteSpecialCase] = None,
 ) -> ET.Element:
     src_id = src_route.attrib.get("id", "unknown")
     target_root = ET.Element("routes")
@@ -1127,11 +1334,12 @@ def _build_action_route_tree(
         raise ValueError(f"Route {src_id} has no <waypoints>.")
     target_route.append(copy.deepcopy(waypoints_elem))
     target_route.append(
-        _build_two_step_instructions(
+        _build_route_instructions(
             rng=rng,
             accelerate_target_speed_ms=accelerate_target_speed_ms,
-            action=action,
             navigation_trigger=navigation_trigger,
+            special_case=special_case,
+            action=action,
         )
     )
     target_route.append(_build_default_evaluation())
@@ -1195,8 +1403,16 @@ def convert_file(
             carla_map=carla_map,
             rng=route_rng,
         )
-        selected_sample = samples[navigation_trigger.sample_index]
-        output_actions = _select_output_actions(list(selected_sample.actions), route_rng)
+        special_case = detect_route_special_case(
+            route_positions=route_positions,
+            carla_map=carla_map,
+            samples=samples,
+        )
+        if special_case is not None:
+            output_actions = [special_case.action_name]
+        else:
+            selected_sample = samples[navigation_trigger.sample_index]
+            output_actions = _select_output_actions(list(selected_sample.actions), route_rng)
         if not output_actions:
             print(f"[INFO] Route {src_id}: no retained actions, skipping.")
             continue
@@ -1217,6 +1433,7 @@ def convert_file(
                 navigation_trigger=navigation_trigger,
                 accelerate_target_speed_ms=accelerate_target_speed_ms,
                 rng=route_rng,
+                special_case=special_case,
             )
             output_path = output_dir / f"{stem_prefix}_language_{action}.xml"
             ET.ElementTree(route_tree).write(

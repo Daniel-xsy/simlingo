@@ -1,0 +1,59 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<routes>
+  <route id="2403_LANG_TURN_STRAIGHT" town="Town12" benchmark_type="language_following" category="instruction_following" disable_bg_vehicle="true">
+    <waypoints>
+      <position x="-3418.8" y="1174.6" z="345.3" />
+      <position x="-3419.3" y="1176.6" z="345.3" />
+      <position x="-3419.8" y="1178.5" z="345.3" />
+      <position x="-3442.4" y="1195.4" z="346.3" />
+      <position x="-3444.3" y="1195.0" z="346.4" />
+      <position x="-3446.3" y="1194.5" z="346.5" />
+      <position x="-3448.2" y="1194.0" z="346.5" />
+      <position x="-3450.2" y="1193.5" z="346.6" />
+      <position x="-3452.1" y="1193.1" z="346.6" />
+      <position x="-3454.0" y="1192.6" z="346.7" />
+      <position x="-3455.9" y="1192.0" z="346.8" />
+      <position x="-3457.9" y="1191.5" z="346.8" />
+      <position x="-3459.8" y="1191.0" z="346.9" />
+      <position x="-3461.7" y="1190.5" z="346.9" />
+      <position x="-3463.6" y="1189.9" z="347.0" />
+      <position x="-3465.5" y="1189.4" z="347.0" />
+      <position x="-3467.4" y="1188.8" z="347.1" />
+      <position x="-3469.4" y="1188.2" z="347.1" />
+      <position x="-3471.3" y="1187.6" z="347.1" />
+    </waypoints>
+    <instructions>
+      <instruction id="1" priority="primary">
+        <trigger type="distance_traveled" value="0.0" />
+        <text>accelerate to 26 m/s</text>
+        <command_id>-1</command_id>
+        <expected_behavior type="target_speed" speed_ms="26" tolerance_ms="1.5" />
+        <duration_meters>5.0</duration_meters>
+      </instruction>
+      <instruction id="2" priority="primary">
+        <trigger type="distance_traveled" value="5.0" />
+        <text>go straight at the next intersection</text>
+        <command_id>3</command_id>
+        <expected_behavior type="turn" direction="straight" />
+        <duration_meters>-1</duration_meters>
+      </instruction>
+    </instructions>
+    <evaluation>
+      <metric type="collision_check">
+        <param name="expect_collision" value="false" />
+      </metric>
+      <metric type="instruction_compliance">
+        <param name="compliance_threshold" value="0.8" />
+      </metric>
+    </evaluation>
+    <scenarios>
+      <scenario name="FreeRide_1" type="FreeRide">
+        <trigger_point x="-3418.8" y="1174.6" z="345.3" yaw="104.0" />
+      </scenario>
+    </scenarios>
+    <weathers>
+      <weather cloudiness="80.0" fog_density="3.0" precipitation="0.0" precipitation_deposits="50.0" route_percentage="0" sun_altitude_angle="45.0" sun_azimuth_angle="-1.0" wetness="20.0" wind_intensity="10.0" />
+      <weather cloudiness="80.0" fog_density="3.0" precipitation="0.0" precipitation_deposits="50.0" route_percentage="100" sun_altitude_angle="45.0" sun_azimuth_angle="-1.0" wetness="20.0" wind_intensity="10.0" />
+    </weathers>
+  </route>
+</routes>

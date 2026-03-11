@@ -34,19 +34,25 @@ except ImportError as exc:  # pragma: no cover - environment dependent
 try:
     from language_navigation.generate_language_xml_distance import (
         CarlaMapCache,
+        RouteSpecialCase,
         _can_change_lane,
         _get_waypoint_positions,
         _route_length_m,
         _scan_turn_actions,
+        detect_route_special_case,
+        _sample_navigation_instruction_for_action,
         select_navigation_trigger,
     )
 except ImportError:
     from generate_language_xml_distance import (  # type: ignore
         CarlaMapCache,
+        RouteSpecialCase,
         _can_change_lane,
         _get_waypoint_positions,
         _route_length_m,
         _scan_turn_actions,
+        detect_route_special_case,
+        _sample_navigation_instruction_for_action,
         select_navigation_trigger,
     )
 
@@ -466,6 +472,23 @@ def _extract_bench2drive_scenarios(route_elem: ET.Element) -> List[Dict[str, Any
     return scenarios
 
 
+def _special_case_prompt_text(
+    special_case: RouteSpecialCase,
+    rng: random.Random,
+) -> Tuple[str, Optional[str]]:
+    primary = _sample_navigation_instruction_for_action(
+        rng, action=special_case.primary_action, phrasing_mode=special_case.primary_phrasing_mode
+    )["text"]
+    secondary = None
+    if special_case.secondary_action is not None:
+        secondary = _sample_navigation_instruction_for_action(
+            rng,
+            action=special_case.secondary_action,
+            phrasing_mode=special_case.secondary_phrasing_mode or "approach",
+        )["text"]
+    return str(primary), None if secondary is None else str(secondary)
+
+
 def _build_text_panel_lines(
     route_id_input: str,
     xml_path: Path,
@@ -481,6 +504,15 @@ def _build_text_panel_lines(
     trigger_source_kind: str,
     trigger_phrasing_mode: str,
     bench2drive_scenarios: List[Dict[str, Any]],
+    sampled_actions: List[str],
+    sampled_trigger_distance_m: float,
+    sampled_trigger_position: Tuple[float, float, float],
+    sampled_selected_action: str,
+    sampled_selected_prompt: str,
+    sampled_trigger_score: int,
+    special_case: Optional[RouteSpecialCase],
+    special_case_primary_prompt: Optional[str],
+    special_case_secondary_prompt: Optional[str],
 ) -> str:
     lines: List[str] = []
     lines.append("Route Debug Summary")
@@ -500,6 +532,18 @@ def _build_text_panel_lines(
     lines.append(f"actionability score: {trigger_score}")
     lines.append(f"trigger source: {trigger_source_kind}")
     lines.append(f"phrasing mode: {trigger_phrasing_mode}")
+    if special_case is not None:
+        lines.append(f"route special case: {special_case.kind}")
+        lines.append(
+            f"special action: {special_case.action_name} @ {special_case.primary_trigger_distance_m:.1f} m"
+        )
+        lines.append(f"special primary prompt: {special_case_primary_prompt}")
+        if special_case.secondary_action is not None and special_case.secondary_trigger_distance_m is not None:
+            lines.append(
+                f"special secondary action: {special_case.secondary_action} @ "
+                f"{special_case.secondary_trigger_distance_m:.1f} m"
+            )
+            lines.append(f"special secondary prompt: {special_case_secondary_prompt}")
     lines.append("")
     lines.append("Bench2Drive scenarios:")
     if bench2drive_scenarios:
@@ -518,9 +562,21 @@ def _build_text_panel_lines(
     else:
         lines.append("none")
     lines.append("")
-    lines.append("Actionable navigation items:")
+    lines.append("Displayed actionable items:")
     for index, action in enumerate(actionable_actions, start=1):
         lines.append(f"{index}. {action}")
+    lines.append("")
+    lines.append("Raw sampled actionability:")
+    lines.append(f"sampled trigger distance: {sampled_trigger_distance_m:.1f} m")
+    lines.append(
+        f"sampled trigger xyz: ({sampled_trigger_position[0]:.1f}, "
+        f"{sampled_trigger_position[1]:.1f}, {sampled_trigger_position[2]:.1f})"
+    )
+    lines.append(f"sampled selected action: {sampled_selected_action}")
+    lines.append(f"sampled selected prompt: {sampled_selected_prompt}")
+    lines.append(f"sampled actionability score: {sampled_trigger_score}")
+    for index, action in enumerate(sampled_actions, start=1):
+        lines.append(f"sampled {index}. {action}")
 
     if ego_waypoint is not None:
         lines.append("")
@@ -555,6 +611,8 @@ def _plot_debug_figure(
     bounds_xy: Tuple[float, float, float, float],
     trigger_distance_m: float,
     navigation_position: Tuple[float, float, float],
+    sampled_trigger_distance_m: float,
+    sampled_navigation_position: Tuple[float, float, float],
     original_trigger_points: List[Tuple[float, float, float, float]],
     actionable_actions: List[str],
     ego_waypoint: Optional["carla.Waypoint"],
@@ -565,6 +623,13 @@ def _plot_debug_figure(
     trigger_source_kind: str,
     trigger_phrasing_mode: str,
     bench2drive_scenarios: List[Dict[str, Any]],
+    sampled_actions: List[str],
+    sampled_selected_action: str,
+    sampled_selected_prompt: str,
+    sampled_trigger_score: int,
+    special_case: Optional[RouteSpecialCase],
+    special_case_primary_prompt: Optional[str],
+    special_case_secondary_prompt: Optional[str],
     dpi: int,
     show: bool,
     render: bool,
@@ -685,18 +750,43 @@ def _plot_debug_figure(
             label="Bench2Drive trigger",
         )
 
-    # Algorithmic trigger point.
+    # Raw sampled trigger point.
     ax_map.scatter(
-        [navigation_position[0]],
-        [navigation_position[1]],
+        [sampled_navigation_position[0]],
+        [sampled_navigation_position[1]],
         marker="D",
         s=95,
         color="#264653",
         edgecolors="white",
         linewidths=0.8,
         zorder=7,
-        label=f"algo trigger @ {trigger_distance_m:.1f}m",
+        label=f"sampled trigger @ {sampled_trigger_distance_m:.1f}m",
     )
+
+    if special_case is not None:
+        ax_map.scatter(
+            [navigation_position[0]],
+            [navigation_position[1]],
+            marker="P",
+            s=110,
+            color="#7c3aed",
+            edgecolors="white",
+            linewidths=0.8,
+            zorder=8,
+            label=f"{special_case.kind} trigger @ {trigger_distance_m:.1f}m",
+        )
+        if special_case.secondary_position is not None and special_case.secondary_trigger_distance_m is not None:
+            ax_map.scatter(
+                [special_case.secondary_position[0]],
+                [special_case.secondary_position[1]],
+                marker="X",
+                s=105,
+                color="#0f766e",
+                edgecolors="white",
+                linewidths=0.8,
+                zorder=8,
+                label=f"{special_case.kind} secondary @ {special_case.secondary_trigger_distance_m:.1f}m",
+            )
 
     lane_type_label = (
         str(ego_waypoint.lane_type).split(".")[-1] if ego_waypoint is not None else "unknown"
@@ -753,6 +843,15 @@ def _plot_debug_figure(
         trigger_source_kind=trigger_source_kind,
         trigger_phrasing_mode=trigger_phrasing_mode,
         bench2drive_scenarios=bench2drive_scenarios,
+        sampled_actions=sampled_actions,
+        sampled_trigger_distance_m=sampled_trigger_distance_m,
+        sampled_trigger_position=sampled_navigation_position,
+        sampled_selected_action=sampled_selected_action,
+        sampled_selected_prompt=sampled_selected_prompt,
+        sampled_trigger_score=sampled_trigger_score,
+        special_case=special_case,
+        special_case_primary_prompt=special_case_primary_prompt,
+        special_case_secondary_prompt=special_case_secondary_prompt,
     )
     ax_text.axis("off")
     ax_text.text(
@@ -826,9 +925,43 @@ def _process_single_xml(
         carla_map=carla_map,
         rng=trigger_rng,
     )
-    trigger_distance_m = selected_trigger.distance_m
-    navigation_position = selected_trigger.position
-    actionable_actions = list(samples[selected_trigger.sample_index].actions)
+    sampled_trigger_distance_m = selected_trigger.distance_m
+    sampled_navigation_position = selected_trigger.position
+    sampled_actions = list(samples[selected_trigger.sample_index].actions)
+    special_case = detect_route_special_case(
+        route_positions=route_positions,
+        carla_map=carla_map,
+        samples=samples,
+    )
+    if special_case is not None:
+        special_rng = random.Random(
+            f"special:{xml_path.name}:{route_elem.attrib.get('id', route_id_input)}"
+        )
+        special_case_primary_prompt, special_case_secondary_prompt = _special_case_prompt_text(
+            special_case, special_rng
+        )
+        trigger_distance_m = special_case.primary_trigger_distance_m
+        navigation_position = special_case.primary_position
+        actionable_actions = [special_case.primary_action]
+        if special_case.secondary_action is not None:
+            actionable_actions.append(special_case.secondary_action)
+        selected_action = special_case.primary_action
+        selected_prompt = special_case_primary_prompt
+        trigger_source_kind = f"special_case_{special_case.kind}"
+        trigger_phrasing_mode = special_case.primary_phrasing_mode
+        trigger_score = len(actionable_actions)
+    else:
+        special_case_primary_prompt = None
+        special_case_secondary_prompt = None
+        trigger_distance_m = sampled_trigger_distance_m
+        navigation_position = sampled_navigation_position
+        actionable_actions = sampled_actions
+        selected_action = selected_trigger.selected_action
+        selected_prompt = selected_trigger.sampled_text
+        trigger_source_kind = selected_trigger.source_kind
+        trigger_phrasing_mode = selected_trigger.phrasing_mode
+        trigger_score = selected_trigger.score
+
     ego_waypoint = carla_map.get_waypoint(
         carla.Location(
             x=navigation_position[0],
@@ -879,6 +1012,8 @@ def _process_single_xml(
         bounds_xy=bounds_xy,
         trigger_distance_m=trigger_distance_m,
         navigation_position=navigation_position,
+        sampled_trigger_distance_m=sampled_trigger_distance_m,
+        sampled_navigation_position=sampled_navigation_position,
         original_trigger_points=[
             scenario["trigger_point"]
             for scenario in bench2drive_scenarios
@@ -887,12 +1022,19 @@ def _process_single_xml(
         actionable_actions=actionable_actions,
         ego_waypoint=ego_waypoint,
         ego_turn_actions=ego_turn_actions,
-        selected_action=selected_trigger.selected_action,
-        selected_prompt=selected_trigger.sampled_text,
-        trigger_score=selected_trigger.score,
-        trigger_source_kind=selected_trigger.source_kind,
-        trigger_phrasing_mode=selected_trigger.phrasing_mode,
+        selected_action=selected_action,
+        selected_prompt=selected_prompt,
+        trigger_score=trigger_score,
+        trigger_source_kind=trigger_source_kind,
+        trigger_phrasing_mode=trigger_phrasing_mode,
         bench2drive_scenarios=bench2drive_scenarios,
+        sampled_actions=sampled_actions,
+        sampled_selected_action=selected_trigger.selected_action,
+        sampled_selected_prompt=selected_trigger.sampled_text,
+        sampled_trigger_score=selected_trigger.score,
+        special_case=special_case,
+        special_case_primary_prompt=special_case_primary_prompt,
+        special_case_secondary_prompt=special_case_secondary_prompt,
         dpi=dpi,
         show=show,
         render=render,
@@ -902,10 +1044,17 @@ def _process_single_xml(
     print(f"Town: {town}")
     print(f"Route length: {route_length_m:.1f} m")
     print(f"Bench2Drive scenarios: {len(bench2drive_scenarios)}")
-    print(f"Algorithmic trigger distance: {trigger_distance_m:.1f} m")
-    print(f"Algorithmic trigger source: {selected_trigger.source_kind}")
-    print(f"Algorithmic trigger phrasing: {selected_trigger.phrasing_mode}")
-    print(f"Selected prompt: {selected_trigger.sampled_text}")
+    print(f"Sampled trigger distance: {sampled_trigger_distance_m:.1f} m")
+    print(f"Sampled trigger source: {selected_trigger.source_kind}")
+    print(f"Sampled trigger phrasing: {selected_trigger.phrasing_mode}")
+    print(f"Sampled prompt: {selected_trigger.sampled_text}")
+    if special_case is not None:
+        print(f"Route special case: {special_case.kind}")
+        print(f"Special primary trigger distance: {trigger_distance_m:.1f} m")
+        print(f"Special primary prompt: {special_case_primary_prompt}")
+        if special_case.secondary_action is not None and special_case.secondary_trigger_distance_m is not None:
+            print(f"Special secondary trigger distance: {special_case.secondary_trigger_distance_m:.1f} m")
+            print(f"Special secondary prompt: {special_case_secondary_prompt}")
     print(f"Actionable items: {actionable_actions}")
     print(f"Saved debug figure: {output_path}")
 

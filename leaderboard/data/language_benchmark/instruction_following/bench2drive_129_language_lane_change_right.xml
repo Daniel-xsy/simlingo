@@ -1,0 +1,67 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<routes>
+  <route id="23659_LANG_LANE_CHANGE_RIGHT" town="Town12" benchmark_type="language_following" category="instruction_following" disable_bg_vehicle="true">
+    <waypoints>
+      <position x="2583.2" y="3202.2" z="366.0" />
+      <position x="2585.1" y="3201.4" z="366.0" />
+      <position x="2587.1" y="3200.5" z="366.0" />
+      <position x="2589.0" y="3199.6" z="366.0" />
+      <position x="2590.9" y="3198.7" z="366.0" />
+      <position x="2592.7" y="3197.7" z="366.0" />
+      <position x="2594.6" y="3196.7" z="366.0" />
+      <position x="2596.4" y="3195.7" z="366.0" />
+      <position x="2598.2" y="3194.6" z="366.0" />
+      <position x="2600.0" y="3193.5" z="366.0" />
+      <position x="2601.8" y="3192.3" z="366.0" />
+      <position x="2603.5" y="3191.1" z="366.0" />
+      <position x="2647.7" y="3170.0" z="366.0" />
+      <position x="2649.6" y="3169.4" z="366.0" />
+      <position x="2651.5" y="3168.8" z="366.0" />
+      <position x="2653.4" y="3168.2" z="366.0" />
+      <position x="2655.4" y="3167.7" z="366.0" />
+      <position x="2657.3" y="3167.1" z="366.0" />
+      <position x="2659.2" y="3166.6" z="366.0" />
+      <position x="2661.1" y="3166.0" z="365.9" />
+      <position x="2663.0" y="3165.5" z="365.9" />
+      <position x="2664.9" y="3165.0" z="365.9" />
+      <position x="2666.9" y="3164.4" z="365.9" />
+      <position x="2668.8" y="3163.9" z="365.8" />
+      <position x="2670.7" y="3163.4" z="365.8" />
+      <position x="2672.7" y="3162.9" z="365.8" />
+      <position x="2674.6" y="3162.4" z="365.7" />
+    </waypoints>
+    <instructions>
+      <instruction id="1" priority="primary">
+        <trigger type="distance_traveled" value="0.0" />
+        <text>set your speed to 32 m/s</text>
+        <command_id>-1</command_id>
+        <expected_behavior type="target_speed" speed_ms="32" tolerance_ms="1.5" />
+        <duration_meters>5.0</duration_meters>
+      </instruction>
+      <instruction id="2" priority="primary">
+        <trigger type="distance_traveled" value="5.0" />
+        <text>merge into the lane on the right</text>
+        <command_id>6</command_id>
+        <expected_behavior type="lane_change" direction="right" />
+        <duration_meters>-1</duration_meters>
+      </instruction>
+    </instructions>
+    <evaluation>
+      <metric type="collision_check">
+        <param name="expect_collision" value="false" />
+      </metric>
+      <metric type="instruction_compliance">
+        <param name="compliance_threshold" value="0.8" />
+      </metric>
+    </evaluation>
+    <scenarios>
+      <scenario name="FreeRide_1" type="FreeRide">
+        <trigger_point x="2583.2" y="3202.2" z="366.0" yaw="-22.8" />
+      </scenario>
+    </scenarios>
+    <weathers>
+      <weather cloudiness="60.0" fog_density="3.0" precipitation="60.0" precipitation_deposits="60.0" route_percentage="0" sun_altitude_angle="45.0" sun_azimuth_angle="-1.0" wetness="0.0" wind_intensity="60.0" />
+      <weather cloudiness="60.0" fog_density="3.0" precipitation="60.0" precipitation_deposits="60.0" route_percentage="100" sun_altitude_angle="45.0" sun_azimuth_angle="-1.0" wetness="0.0" wind_intensity="60.0" />
+    </weathers>
+  </route>
+</routes>

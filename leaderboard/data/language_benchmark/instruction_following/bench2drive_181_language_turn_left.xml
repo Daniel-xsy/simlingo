@@ -1,0 +1,58 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<routes>
+  <route id="25968_LANG_TURN_LEFT" town="Town07" benchmark_type="language_following" category="instruction_following" disable_bg_vehicle="true">
+    <waypoints>
+      <position x="-2.1" y="17.8" z="0.0" />
+      <position x="-2.1" y="15.8" z="0.0" />
+      <position x="-2.1" y="13.8" z="0.0" />
+      <position x="10.9" y="0.1" z="0.0" />
+      <position x="12.9" y="0.0" z="0.0" />
+      <position x="14.9" y="0.0" z="0.0" />
+      <position x="16.9" y="-0.0" z="0.0" />
+      <position x="18.9" y="-0.0" z="0.0" />
+      <position x="20.9" y="-0.0" z="0.0" />
+      <position x="22.9" y="-0.1" z="0.0" />
+      <position x="24.9" y="-0.1" z="0.0" />
+      <position x="26.9" y="-0.1" z="0.0" />
+      <position x="28.9" y="-0.1" z="0.0" />
+      <position x="30.9" y="-0.1" z="0.0" />
+      <position x="32.8" y="-0.1" z="0.0" />
+      <position x="34.8" y="-0.1" z="0.0" />
+      <position x="36.8" y="-0.1" z="0.0" />
+      <position x="38.8" y="-0.0" z="0.0" />
+    </waypoints>
+    <instructions>
+      <instruction id="1" priority="primary">
+        <trigger type="distance_traveled" value="0.0" />
+        <text>reach 13 m/s</text>
+        <command_id>-1</command_id>
+        <expected_behavior type="target_speed" speed_ms="13" tolerance_ms="1.5" />
+        <duration_meters>5.0</duration_meters>
+      </instruction>
+      <instruction id="2" priority="primary">
+        <trigger type="distance_traveled" value="5.0" />
+        <text>go left at the next intersection</text>
+        <command_id>1</command_id>
+        <expected_behavior type="turn" direction="left" />
+        <duration_meters>-1</duration_meters>
+      </instruction>
+    </instructions>
+    <evaluation>
+      <metric type="collision_check">
+        <param name="expect_collision" value="false" />
+      </metric>
+      <metric type="instruction_compliance">
+        <param name="compliance_threshold" value="0.8" />
+      </metric>
+    </evaluation>
+    <scenarios>
+      <scenario name="FreeRide_1" type="FreeRide">
+        <trigger_point x="-2.1" y="17.8" z="0.0" yaw="-90.0" />
+      </scenario>
+    </scenarios>
+    <weathers>
+      <weather cloudiness="5.0" fog_density="2.0" precipitation="0.0" precipitation_deposits="0.0" route_percentage="0" sun_altitude_angle="90.0" sun_azimuth_angle="-1.0" wetness="0.0" wind_intensity="10.0" />
+      <weather cloudiness="5.0" fog_density="2.0" precipitation="0.0" precipitation_deposits="0.0" route_percentage="100" sun_altitude_angle="90.0" sun_azimuth_angle="-1.0" wetness="0.0" wind_intensity="10.0" />
+    </weathers>
+  </route>
+</routes>

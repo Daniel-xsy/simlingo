@@ -1,0 +1,68 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<routes>
+  <route id="3090_LANG_TURN_LEFT" town="Town12" benchmark_type="language_following" category="instruction_following" disable_bg_vehicle="true">
+    <waypoints>
+      <position x="1790.2" y="4991.5" z="367.1" />
+      <position x="1788.2" y="4991.5" z="367.2" />
+      <position x="1786.2" y="4991.5" z="367.2" />
+      <position x="1784.2" y="4991.5" z="367.3" />
+      <position x="1782.2" y="4991.5" z="367.3" />
+      <position x="1780.2" y="4991.6" z="367.3" />
+      <position x="1778.2" y="4991.6" z="367.4" />
+      <position x="1776.2" y="4991.6" z="367.4" />
+      <position x="1774.2" y="4991.6" z="367.4" />
+      <position x="1772.2" y="4991.6" z="367.5" />
+      <position x="1770.2" y="4991.6" z="367.5" />
+      <position x="1768.2" y="4991.6" z="367.5" />
+      <position x="1766.2" y="4991.6" z="367.6" />
+      <position x="1748.0" y="5011.5" z="367.9" />
+      <position x="1748.0" y="5013.5" z="367.9" />
+      <position x="1748.0" y="5015.5" z="367.9" />
+      <position x="1748.0" y="5017.5" z="368.0" />
+      <position x="1748.0" y="5019.5" z="368.0" />
+      <position x="1748.1" y="5021.5" z="368.0" />
+      <position x="1748.1" y="5023.5" z="368.0" />
+      <position x="1748.1" y="5025.5" z="368.0" />
+      <position x="1748.1" y="5027.5" z="368.0" />
+      <position x="1748.1" y="5029.5" z="368.0" />
+      <position x="1748.1" y="5031.5" z="368.0" />
+      <position x="1748.1" y="5033.5" z="368.0" />
+      <position x="1748.1" y="5035.5" z="368.0" />
+      <position x="1748.2" y="5037.5" z="368.0" />
+      <position x="1748.2" y="5039.5" z="368.0" />
+    </waypoints>
+    <instructions>
+      <instruction id="1" priority="primary">
+        <trigger type="distance_traveled" value="0.0" />
+        <text>reach 13 m/s</text>
+        <command_id>-1</command_id>
+        <expected_behavior type="target_speed" speed_ms="13" tolerance_ms="1.5" />
+        <duration_meters>5.0</duration_meters>
+      </instruction>
+      <instruction id="2" priority="primary">
+        <trigger type="distance_traveled" value="5.0" />
+        <text>hang a left at the next junction</text>
+        <command_id>1</command_id>
+        <expected_behavior type="turn" direction="left" />
+        <duration_meters>-1</duration_meters>
+      </instruction>
+    </instructions>
+    <evaluation>
+      <metric type="collision_check">
+        <param name="expect_collision" value="false" />
+      </metric>
+      <metric type="instruction_compliance">
+        <param name="compliance_threshold" value="0.8" />
+      </metric>
+    </evaluation>
+    <scenarios>
+      <scenario name="FreeRide_1" type="FreeRide">
+        <trigger_point x="1790.2" y="4991.5" z="367.1" yaw="180.0" />
+      </scenario>
+    </scenarios>
+    <weathers>
+      <weather cloudiness="100.0" fog_density="7.0" precipitation="100.0" precipitation_deposits="90.0" route_percentage="0" sun_altitude_angle="45.0" sun_azimuth_angle="-1.0" wetness="0.0" wind_intensity="100.0" />
+      <weather cloudiness="100.0" fog_density="7.0" precipitation="100.0" precipitation_deposits="90.0" route_percentage="100" sun_altitude_angle="45.0" sun_azimuth_angle="-1.0" wetness="0.0" wind_intensity="100.0" />
+    </weathers>
+  </route>
+</routes>
