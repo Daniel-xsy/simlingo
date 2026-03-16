@@ -26,7 +26,7 @@ from agents.navigation.local_planner import RoadOption
 from srunner.scenarioconfigs.scenario_configuration import ActorConfigurationData
 from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
 
-from srunner.scenariomanager.scenarioatomics.atomic_behaviors import ScenarioTriggerer, Idle
+from srunner.scenariomanager.scenarioatomics.atomic_behaviors import ScenarioTriggerer, Idle, TrafficLightFreezer
 from srunner.scenariomanager.scenarioatomics.atomic_trigger_conditions import WaitForBlackboardVariable
 from srunner.scenariomanager.scenarioatomics.atomic_criteria import (CollisionTest,
                                                                      InRouteTest,
@@ -81,6 +81,8 @@ class RouteScenario(BasicScenario):
         self.list_scenarios = []
         self.occupied_parking_locations = []
         self.available_parking_locations = []
+        self._all_green_traffic_lights = {}
+        self._all_green_previous_states = {}
 
         scenario_configurations = self._filter_scenarios(config.scenario_configs)
         self.scenario_configurations = scenario_configurations
@@ -94,6 +96,7 @@ class RouteScenario(BasicScenario):
             self._draw_waypoints(self.route, vertical_shift=0.1, size=0.1, downsample=10)
 
         self._parked_ids = []
+        self._apply_initial_traffic_light_override()
         self._get_parking_slots()
 
         super(RouteScenario, self).__init__(
@@ -105,6 +108,42 @@ class RouteScenario(BasicScenario):
 
         # Set runtime init mode. Do this after the first set of scenarios has been initialized!
         CarlaDataProvider.set_runtime_init_mode(True)
+
+    def _apply_initial_traffic_light_override(self):
+        """Apply route-level traffic light overrides before the route starts."""
+        if not getattr(self.config, 'force_all_green_traffic_lights', False):
+            return
+
+        duration = self.timeout
+        traffic_lights = self.world.get_actors().filter('*traffic_light*')
+        for traffic_light in traffic_lights:
+            self._all_green_traffic_lights[traffic_light] = carla.TrafficLightState.Green
+            self._all_green_previous_states[traffic_light] = {
+                'state': traffic_light.get_state(),
+                'green_time': traffic_light.get_green_time(),
+                'red_time': traffic_light.get_red_time(),
+                'yellow_time': traffic_light.get_yellow_time(),
+            }
+            traffic_light.set_state(carla.TrafficLightState.Green)
+            traffic_light.set_green_time(duration)
+            traffic_light.set_red_time(duration)
+            traffic_light.set_yellow_time(duration)
+
+    def _restore_traffic_lights(self):
+        """Restore traffic lights changed by the route-level override."""
+        if not self._all_green_previous_states:
+            return
+
+        for traffic_light, previous in self._all_green_previous_states.items():
+            if not traffic_light.is_alive:
+                continue
+            traffic_light.set_state(previous['state'])
+            traffic_light.set_green_time(previous['green_time'])
+            traffic_light.set_red_time(previous['red_time'])
+            traffic_light.set_yellow_time(previous['yellow_time'])
+
+        self._all_green_previous_states.clear()
+        self._all_green_traffic_lights.clear()
 
     def _get_route(self, config):
         """
@@ -409,6 +448,15 @@ class RouteScenario(BasicScenario):
         if not disable_bg:
             behavior.add_child(BackgroundBehavior(self.ego_vehicles[0], self.route, name="BackgroundActivity"))
 
+        if self._all_green_traffic_lights:
+            behavior.add_child(
+                TrafficLightFreezer(
+                    self._all_green_traffic_lights,
+                    duration=self.timeout,
+                    name="ForceAllGreenTrafficLights",
+                )
+            )
+
         behavior.add_children(scenario_behaviors)
         return behavior
 
@@ -496,5 +544,6 @@ class RouteScenario(BasicScenario):
         """
         Remove all actors upon deletion
         """
+        self._restore_traffic_lights()
         self.client.apply_batch([carla.command.DestroyActor(x) for x in self._parked_ids])
         self.remove_all_actors()

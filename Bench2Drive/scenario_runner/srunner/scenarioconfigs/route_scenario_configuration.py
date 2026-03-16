@@ -51,3 +51,4 @@ class RouteScenarioConfiguration(ScenarioConfiguration):
         self.keypoints = None
         self.scenario_configs = []
         self.disable_bg_vehicle = False  # If True, disable background traffic
+        self.force_all_green_traffic_lights = False  # If True, force all traffic lights to stay green
