@@ -14,19 +14,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--select-file",
         type=Path,
-        default=Path("language_navigation/select_route.txt"),
+        default=Path("language_navigation/select_route_subset.txt"),
         help="Text file containing one Bench2Drive route id per line.",
     )
     parser.add_argument(
         "--source-dir",
         type=Path,
-        default=Path("leaderboard/data/language_benchmark/instruction_following"),
+        default=Path("leaderboard/data/language_benchmark/instruction_following_v0.3"),
         help="Directory containing generated language XML files.",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("leaderboard/data/language_benchmark/instruction_following_selected"),
+        default=Path("leaderboard/data/language_benchmark/instruction_following_v0.3_subset"),
         help="Directory to copy the selected XML files into.",
     )
     return parser.parse_args()
