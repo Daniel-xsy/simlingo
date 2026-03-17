@@ -1,128 +1,98 @@
-# Language Navigation XML Generator
+# Language Navigation Toolkit
 
-This folder contains tools for generating language-navigation benchmark XML files from original Bench2Drive route XML files.
+Tools for generating, visualizing, and evaluating language-navigation benchmark XML files built on top of Bench2Drive route data and the CARLA simulator.
 
-Current script:
+## Scripts
 
-- `generate_language_xml_distance.py`: converts one Bench2Drive XML file to language-benchmark format using **distance-based** instruction triggers.
+### `utils.py`
 
-## What The Script Does
+Shared utility module imported by all other scripts. Contains:
 
-Given an input route XML from `leaderboard/data/bench2drive_split`:
+- **`CarlaMapCache`** / **`SpeedLimitMapCache`** — cached OpenDRIVE map and speed-limit lookups.
+- **`INSTRUCTION_LIBRARY`** — paraphrase pools for lane follow, lane change, turn, accelerate, and decelerate instructions.
+- **Geometry helpers** — `_distance`, `_route_length_m`, `_position_at_distance`, `_normalize_yaw_delta_deg`, `_compute_turn_category`, etc.
+- **Route actionability analysis** — `_scan_turn_actions`, `_build_actionable_navigation_categories`, `_sample_route_actionability`, `select_navigation_trigger`, `detect_route_special_case`.
+- **XML building blocks** — `_append_instruction`, `_build_default_evaluation`, `_build_default_scenarios`, `_build_action_route_tree`, `_indent_xml_compat`.
 
-- keeps original route geometry and environment:
-  - `<waypoints>`
-  - `<scenarios>`
-  - `<weathers>`
-- writes language-benchmark route attributes:
-  - `benchmark_type="language_following"`
-  - `category=<your value>`
-  - `disable_bg_vehicle="true"` (default)
-- creates `<instructions>` with trigger type:
-  - `distance_traveled`
-- ignores original `<scenarios>` trigger definitions from Bench2Drive XML
-- writes a minimal `<scenarios>` block required by evaluator:
-  - `<scenario name="FreeRide_1" type="FreeRide">`
-  - `trigger_point` set to first waypoint (start of route)
-- adds a default `<evaluation>` block:
-  - `collision_check`
-  - `instruction_compliance`
+### `generate_language_xml_route.py`
 
-## Instruction Sampling
-
-Instructions are sampled from category-specific paraphrase pools in `INSTRUCTION_LIBRARY`.
-
-Implemented categories include:
-
-- lane follow
-- lane change left/right
-- turn left/right/straight
-- accelerate (vague + precise)
-- decelerate (vague + precise)
-
-### Speed Instruction Styles
-
-Use `--instruction-style` to control speed-command wording:
-
-- `vague`: "speed up", "slow down", etc.
-- `precise`: "accelerate to 20 m/s", "decelerate to 6 m/s", etc.
-- `all`: mixture of vague and precise
-
-## Multi-Instruction Composition
-
-Use `--num-instructions` and `--trigger-step-m` to compose multiple instructions in one route.
-
-Example with:
-
-- `--num-instructions 3`
-- `--trigger-step-m 40`
-
-Result:
-
-- instruction 1 starts at `0m`, lasts `40m`
-- instruction 2 starts at `40m`, lasts `40m`
-- instruction 3 starts at `80m`, lasts to end (`duration_meters = -1`)
-
-## Usage
-
-From repo root:
+Generates language-benchmark XMLs by **rebuilding routes from scratch** using CARLA waypoint queries. Starting from a Bench2Drive spawn point, it traces a fresh route with configurable step size (default 3 m), identifies the best navigation trigger via actionability scoring, then branches the route for each feasible action (turn left/right/straight, lane change, lane follow). Each action variant is written as a separate XML file.
 
 ```bash
-python language_navigation/generate_language_xml_distance.py \
-  leaderboard/data/bench2drive_split/bench2drive_00.xml
-```
-
-Output default:
-
-- `leaderboard/data/language_benchmark/instruction_following/bench2drive_00_language_distance.xml`
-
-Generate for a whole folder:
-
-```bash
-python language_navigation/generate_language_xml_distance.py \
-  leaderboard/data/bench2drive_split
-```
-
-This iterates all `*.xml` files in that folder and writes outputs to:
-
-- `leaderboard/data/language_benchmark/instruction_following/`
-
-Specify output path:
-
-```bash
-python language_navigation/generate_language_xml_distance.py \
+python -m language_navigation.generate_language_xml_route \
   leaderboard/data/bench2drive_split/bench2drive_00.xml \
-  --output leaderboard/data/language_benchmark/tmp/bench2drive_00_distance.xml
+  --output leaderboard/data/language_benchmark/instruction_following_rebuilt/
 ```
 
-Generate 4-step composed instructions with mixed speed style:
+### `generate_safety_critical_xml.py`
+
+Generates safety-critical benchmark XMLs from Bench2Drive routes. Copies the original route geometry verbatim (keeping background vehicles and default traffic lights) and injects dangerous language instructions that conflict with the active scenario — e.g., telling the agent to run a red light or ignore a stop sign.
 
 ```bash
-python language_navigation/generate_language_xml_distance.py \
-  leaderboard/data/bench2drive_split/bench2drive_00.xml \
-  --num-instructions 4 \
-  --trigger-step-m 40 \
-  --instruction-style all \
-  --seed 7
+python -m language_navigation.generate_safety_critical_xml \
+  leaderboard/data/bench2drive_split/ \
+  --output leaderboard/data/language_benchmark/safety_critical_v0.1/
 ```
 
-## Arguments
+### `route_xml_bev.py`
 
-- `input_xml` (required): input Bench2Drive XML path
-- `input_xml` (required): input Bench2Drive XML file or folder
-- `--output`: output XML path (default: `leaderboard/data/language_benchmark/instruction_following/<input_stem>_language_distance.xml`)
-- `--category`: route `category` field in output XML
-- `--trigger-step-m`: distance interval between instruction triggers
-- `--seed`: random seed for reproducibility (default: unset/non-deterministic)
-- `--num-instructions`: number of instruction segments per route
-- `--instruction-style`: `all`, `vague`, or `precise`
+Visualizes a generated language-benchmark XML route in bird's-eye view. Renders the CARLA road surface, lane direction arrows, landmarks, the GT route path with waypoint markers, and instruction trigger points. A side panel shows all XML metadata (route attributes, instructions, evaluation metrics, scenarios, weathers).
 
-## Customization Notes
+```bash
+python -m language_navigation.route_xml_bev \
+  bench2drive_02_language_rebuilt_turn_left \
+  --input-dir leaderboard/data/language_benchmark/instruction_following_v0.3_subset
+```
 
-To extend instruction diversity, edit:
+### `route_actionable_bev.py`
 
-- `INSTRUCTION_LIBRARY` text pools
-- `ACCELERATE_TARGET_SPEEDS`
-- `DECELERATE_TARGET_SPEEDS`
+Debug visualization for raw Bench2Drive route actionability. Loads an original Bench2Drive split XML, runs the full trigger-selection algorithm, and plots the route with the selected and sampled trigger positions, available turn options, lane-change feasibility, and special-case detection (merge/exit). Useful for diagnosing why a particular route gets a specific action assignment.
 
-The script is intentionally simple and designed for fast iteration of benchmark data templates.
+```bash
+python -m language_navigation.route_actionable_bev 22 \
+  --input-dir leaderboard/data/bench2drive_split
+```
+
+### `eval_results_bev.py`
+
+Visualizes evaluation results in BEV by overlaying the GT route (from XML, red) and the actual agent trajectory (from `metric_info.json`, blue) on the CARLA map. Marks the route-deviation point if present. The side panel shows scores (`composed`, `route`, `penalty`), status, infractions, instruction text, and trajectory frame count. Supports single-route and batch modes.
+
+```bash
+# Single route
+python -m language_navigation.eval_results_bev \
+  eval_results/LanguageBenchmark/.../bench2drive_02_language_rebuilt_turn_right \
+  --benchmark-dir leaderboard/data/language_benchmark/instruction_following_v0.3_subset
+
+# Batch mode
+python -m language_navigation.eval_results_bev \
+  --eval-root eval_results/LanguageBenchmark/instruction_following_v0.3_subset \
+  --benchmark-dir leaderboard/data/language_benchmark/instruction_following_v0.3_subset
+```
+
+### `aggregate_safety_results.py`
+
+Aggregates safety-critical benchmark results from evaluation JSONs. Groups by category and reports per-category mean scores, collision/infraction rates, and overall safety override rate.
+
+```bash
+python -m language_navigation.aggregate_safety_results \
+  eval_results/LanguageBenchmark/safety_critical_v0.1/
+```
+
+### `copy_selected_routes.py`
+
+Copies generated language XMLs for a subset of Bench2Drive route ids listed in a text file (e.g., `route_subset.txt`). Useful for creating smaller benchmark splits from a full generation run.
+
+## Data Files
+
+- **`route_subset.txt`** — list of Bench2Drive route ids used for subset selection.
+
+## Instruction Categories
+
+Instructions are sampled from `INSTRUCTION_LIBRARY` in `utils.py`:
+
+- Lane follow, lane change left/right, turn left/right/straight
+- Accelerate (vague: "speed up" / precise: "reach 11 m/s")
+- Decelerate (vague: "slow down")
+- Exit left/right (for merge/exit special cases)
+
+To extend instruction diversity, edit the text pools in `INSTRUCTION_LIBRARY`.
