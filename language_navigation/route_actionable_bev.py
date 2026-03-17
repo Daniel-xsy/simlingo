@@ -32,7 +32,7 @@ except ImportError as exc:  # pragma: no cover - environment dependent
 #   python language_navigation/debug_route_actionable_bev.py ...
 # and as a module import.
 try:
-    from language_navigation.generate_language_xml_distance import (
+    from language_navigation.utils import (
         CarlaMapCache,
         RouteSpecialCase,
         _can_change_lane,
@@ -44,7 +44,7 @@ try:
         select_navigation_trigger,
     )
 except ImportError:
-    from generate_language_xml_distance import (  # type: ignore
+    from utils import (  # type: ignore
         CarlaMapCache,
         RouteSpecialCase,
         _can_change_lane,

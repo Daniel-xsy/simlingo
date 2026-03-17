@@ -22,13 +22,13 @@ except ImportError as exc:  # pragma: no cover - environment dependent
     ) from exc
 
 try:
-    from language_navigation.generate_language_xml_distance import (
+    from language_navigation.utils import (
         CarlaMapCache,
         _get_waypoint_positions,
         _route_length_m,
     )
 except ImportError:
-    from generate_language_xml_distance import (  # type: ignore
+    from utils import (  # type: ignore
         CarlaMapCache,
         _get_waypoint_positions,
         _route_length_m,

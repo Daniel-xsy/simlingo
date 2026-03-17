@@ -22,9 +22,10 @@ else:
     CARLA_IMPORT_ERROR = None
 
 try:
-    from language_navigation.generate_language_xml_distance import (
+    from language_navigation.utils import (
         OPTIONAL_LANE_FOLLOW_PROBABILITY,
         CarlaMapCache,
+        SpeedLimitMapCache,
         _append_instruction,
         _build_actionable_navigation_categories,
         _build_default_evaluation,
@@ -41,9 +42,10 @@ try:
         _sample_navigation_instruction_for_action,
     )
 except ImportError:
-    from generate_language_xml_distance import (  # type: ignore
+    from utils import (  # type: ignore
         OPTIONAL_LANE_FOLLOW_PROBABILITY,
         CarlaMapCache,
+        SpeedLimitMapCache,
         _append_instruction,
         _build_actionable_navigation_categories,
         _build_default_evaluation,
@@ -135,7 +137,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--route-step-m",
         type=float,
-        default=5.0,
+        default=3.0,
         help="Sampling step in meters for rebuilt output waypoints.",
     )
     parser.add_argument(
@@ -757,6 +759,7 @@ def convert_file(
     lane_change_prep_m: float,
     min_trigger_distance_m: float,
     map_cache: CarlaMapCache,
+    speed_limit_cache: SpeedLimitMapCache,
     force_all_green_traffic_lights: bool,
 ) -> List[Path]:
     tree = ET.parse(input_xml)
@@ -804,8 +807,9 @@ def convert_file(
         remaining_distance_m = max(0.0, max_distance_m - trigger.distance_m)
         accelerate_target_speed_ms = _sample_accelerate_speed_ms(
             route_rng,
+            town=route_town,
             position=trigger.position,
-            carla_map=carla_map,
+            speed_limit_cache=speed_limit_cache,
         )
 
         stem_prefix = input_xml.stem if not multiple_routes else f"{input_xml.stem}_{src_id}"
@@ -850,6 +854,7 @@ def main() -> None:
         None if args.xodr_root is None else [path.expanduser().resolve() for path in args.xodr_root]
     )
     map_cache = CarlaMapCache(xodr_search_roots=xodr_roots)
+    speed_limit_cache = SpeedLimitMapCache()
 
     if not input_path.exists():
         raise FileNotFoundError(f"Input path not found: {input_path}")
@@ -878,6 +883,7 @@ def main() -> None:
             lane_change_prep_m=args.lane_change_prep_m,
             min_trigger_distance_m=args.min_trigger_distance_m,
             map_cache=map_cache,
+            speed_limit_cache=speed_limit_cache,
             force_all_green_traffic_lights=args.force_all_green_traffic_lights,
         )
         if not written_paths:
@@ -908,6 +914,7 @@ def main() -> None:
             lane_change_prep_m=args.lane_change_prep_m,
             min_trigger_distance_m=args.min_trigger_distance_m,
             map_cache=map_cache,
+            speed_limit_cache=speed_limit_cache,
             force_all_green_traffic_lights=args.force_all_green_traffic_lights,
         )
         if not written_paths:
