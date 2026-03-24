@@ -9,6 +9,8 @@ Tools for generating, visualizing, and evaluating language-navigation benchmark 
 Shared utility module imported by all other scripts. Contains:
 
 - **`CarlaMapCache`** / **`SpeedLimitMapCache`** — cached OpenDRIVE map and speed-limit lookups.
+  `SpeedLimitMapCache` is a compatibility alias for the OpenDRIVE-backed speed resolver.
+  Language benchmark speed limits must come from the OpenDRIVE road `<type><speed>` sections, not `team_code/speed_limits/*.npy`.
 - **`INSTRUCTION_LIBRARY`** — paraphrase pools for lane follow, lane change, turn, accelerate, and decelerate instructions.
 - **Geometry helpers** — `_distance`, `_route_length_m`, `_position_at_distance`, `_normalize_yaw_delta_deg`, `_compute_turn_category`, etc.
 - **Route actionability analysis** — `_scan_turn_actions`, `_build_actionable_navigation_categories`, `_sample_route_actionability`, `select_navigation_trigger`, `detect_route_special_case`.

@@ -93,6 +93,13 @@ class LanguageBenchmarkAgent(LingoAgent):
         self.scenario_var_by_name: Dict[str, str] = {}
         self.scenario_trigger_points: Dict[str, carla.Location] = {}
         self._scenario_defs: List[Tuple[str, Optional[carla.Location]]] = []
+        self._hero_actor = None
+
+        try:
+            from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
+            self._hero_actor = CarlaDataProvider.get_hero_actor()
+        except Exception:
+            self._hero_actor = None
         
         # Parse the route file for instructions
         self._parse_language_benchmark()
@@ -242,12 +249,30 @@ class LanguageBenchmarkAgent(LingoAgent):
     def _update_distance_traveled(self, current_location: carla.Location):
         """Update the total distance traveled"""
         if self.last_location is not None:
-            delta = math.sqrt(
-                (current_location.x - self.last_location.x) ** 2 +
-                (current_location.y - self.last_location.y) ** 2
-            )
-            self.distance_traveled += delta
+            self.distance_traveled += current_location.distance(self.last_location)
         self.last_location = current_location
+
+    def _get_ego_location(self) -> Optional[carla.Location]:
+        """Return the current hero actor location if available."""
+        try:
+            from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
+        except Exception:
+            return None
+
+        if self._hero_actor is None:
+            self._hero_actor = CarlaDataProvider.get_hero_actor()
+
+        if self._hero_actor is None:
+            return None
+
+        location = CarlaDataProvider.get_location(self._hero_actor)
+        if location is None:
+            self._hero_actor = CarlaDataProvider.get_hero_actor()
+            if self._hero_actor is None:
+                return None
+            location = CarlaDataProvider.get_location(self._hero_actor)
+
+        return location
     
     def _get_active_instruction(self, current_location: carla.Location, 
                                  game_time: float) -> Optional[Instruction]:
@@ -387,16 +412,13 @@ class LanguageBenchmarkAgent(LingoAgent):
         """
         Override tick to track distance and update instructions.
         
-        We need to update distance and instructions BEFORE the parent's tick()
-        generates the prompt, so we extract GPS early.
+        We update instruction state before the parent's tick() generates the
+        prompt, but benchmark distance tracking uses the true CARLA actor
+        location instead of GPS-converted coordinates.
         """
-        # Extract GPS position early (before parent's tick)
-        # This replicates the GPS processing from parent's tick method
-        gps_pos = self._route_planner.convert_gps_to_carla(input_data['gps'][1])
-        current_location = carla.Location(x=float(gps_pos[0]), y=float(gps_pos[1]), z=float(gps_pos[2]))
-        
-        # Update distance traveled
-        self._update_distance_traveled(current_location)
+        current_location = self._get_ego_location()
+        if current_location is not None:
+            self._update_distance_traveled(current_location)
         
         # Get active instruction based on current distance, position, and real game time
         if self._latest_game_time is not None:
@@ -406,7 +428,8 @@ class LanguageBenchmarkAgent(LingoAgent):
 
         if self.start_time is None:
             self.start_time = game_time
-        self.current_instruction = self._get_active_instruction(current_location, game_time)
+        if current_location is not None:
+            self.current_instruction = self._get_active_instruction(current_location, game_time)
         
         # Set custom_prompt and user_flag for this instruction
         # This must happen BEFORE parent's tick() generates the prompt
@@ -421,8 +444,12 @@ class LanguageBenchmarkAgent(LingoAgent):
         # Log instruction changes and distance
         if self.step % 20 == 0:  # Log every 20 steps
             instr_text = instruction.text if instruction else "None"
+            location_str = (
+                f"({current_location.x:.1f}, {current_location.y:.1f})"
+                if current_location is not None else "(unavailable)"
+            )
             print(f"[LanguageBenchmarkAgent] Step {self.step}, Distance: {self.distance_traveled:.1f}m, "
-                  f"Location: ({current_location.x:.1f}, {current_location.y:.1f}), "
+                  f"Location: {location_str}, "
                   f"Instruction: '{instr_text}'")
         
         # Now call parent tick - it will use the custom_prompt we just set

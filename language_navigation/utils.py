@@ -162,6 +162,8 @@ INSTRUCTION_LIBRARY: Dict[str, Dict[str, object]] = {
 
 OPTIONAL_LANE_FOLLOW_PROBABILITY = 0.2
 
+ASSUMED_ACCELERATION_MS2 = 3.0
+
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -210,36 +212,107 @@ class RouteSpecialCase:
 
 
 # ---------------------------------------------------------------------------
-# Speed limit cache
+# OpenDRIVE speed limits
 # ---------------------------------------------------------------------------
-class SpeedLimitMapCache:
-    def __init__(self, base_dir: Optional[Path] = None) -> None:
-        self._base_dir = (
-            Path("team_code/speed_limits").resolve() if base_dir is None else base_dir.resolve()
+def _convert_speed_to_kmh(value: float, unit: str) -> float:
+    normalized = unit.strip().lower()
+    if normalized in {"km/h", "kmh", "kph", ""}:
+        return value
+    if normalized == "mph":
+        return value * 1.609344
+    if normalized in {"m/s", "mps"}:
+        return value * 3.6
+    raise ValueError(f"Unsupported OpenDRIVE speed unit: {unit}")
+
+
+class OpenDriveSpeedLimitResolver:
+    def __init__(self, xodr_search_roots: Optional[List[Path]] = None) -> None:
+        self._xodr_search_roots = (
+            _default_xodr_search_roots()
+            if not xodr_search_roots
+            else [p.resolve() for p in xodr_search_roots]
         )
-        self._maps: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
+        self._maps: Dict[str, Dict[int, List[Tuple[float, float]]]] = {}
 
-    def get_speed_limit_kmh(self, town: str, position: Tuple[float, float, float]) -> float:
-        locations, speed_limits = self._load_map(town)
-        point_xy = np.array([position[0], position[1]], dtype=np.float32)
-        deltas = locations[:, :2] - point_xy
-        distances_sq = np.einsum("ij,ij->i", deltas, deltas)
-        nearest_idx = int(np.argmin(distances_sq))
-        return float(speed_limits[nearest_idx])
+    def get_speed_limit_kmh(self, town: str, road_id: int, s: float) -> float:
+        road_sections = self._load_map(town)
+        sections = road_sections.get(int(road_id))
+        if not sections:
+            raise KeyError(
+                f"No OpenDRIVE speed definition found for road {road_id} in town {town}."
+            )
 
-    def _load_map(self, town: str) -> Tuple[np.ndarray, np.ndarray]:
+        active_speed_kmh = sections[0][1]
+        for section_start_s, section_speed_kmh in sections:
+            if s + 1e-6 < section_start_s:
+                break
+            active_speed_kmh = section_speed_kmh
+        return active_speed_kmh
+
+    def _load_map(self, town: str) -> Dict[int, List[Tuple[float, float]]]:
         if town in self._maps:
             return self._maps[town]
 
-        file_path = self._base_dir / f"{town}_speed_limits.npy"
-        if not file_path.exists():
-            raise FileNotFoundError(f"Speed limit file not found for {town}: {file_path}")
+        xodr_path = _resolve_xodr_path(town, self._xodr_search_roots)
+        if xodr_path is None:
+            roots = ", ".join(str(root) for root in self._xodr_search_roots)
+            raise FileNotFoundError(
+                f"Could not find OpenDRIVE map for {town}. Searched under: {roots}"
+            )
 
-        map_data = np.load(file_path, allow_pickle=True).item()
-        locations = np.asarray(map_data["locations"], dtype=np.float32)
-        speed_limits = np.asarray(map_data["speed_limits"], dtype=np.float32)
-        self._maps[town] = (locations, speed_limits)
-        return self._maps[town]
+        root = ET.parse(xodr_path).getroot()
+        road_sections: Dict[int, List[Tuple[float, float]]] = {}
+        # Track roads without speed definitions and their link predecessors/successors
+        # so we can inherit speed from connected roads (common for junction roads).
+        roads_without_speed: Dict[int, List[int]] = {}
+
+        for road_elem in root.findall("road"):
+            road_id_str = road_elem.attrib.get("id")
+            if road_id_str is None:
+                continue
+            road_id = int(road_id_str)
+
+            sections: List[Tuple[float, float]] = []
+            for type_elem in road_elem.findall("type"):
+                speed_elem = type_elem.find("speed")
+                if speed_elem is None:
+                    continue
+                section_start_s = float(type_elem.attrib.get("s", "0"))
+                speed_max = float(speed_elem.attrib["max"])
+                speed_unit = speed_elem.attrib.get("unit", "km/h")
+                sections.append(
+                    (section_start_s, _convert_speed_to_kmh(speed_max, speed_unit))
+                )
+
+            if sections:
+                sections.sort(key=lambda item: item[0])
+                road_sections[road_id] = sections
+            else:
+                # Collect linked road IDs to inherit speed from
+                linked_ids: List[int] = []
+                link_elem = road_elem.find("link")
+                if link_elem is not None:
+                    for tag in ("predecessor", "successor"):
+                        elem = link_elem.find(tag)
+                        if elem is not None and elem.attrib.get("elementType") == "road":
+                            try:
+                                linked_ids.append(int(elem.attrib["elementId"]))
+                            except (KeyError, ValueError):
+                                pass
+                roads_without_speed[road_id] = linked_ids
+
+        # Inherit speed for roads without their own definition (e.g. junction roads)
+        for road_id, linked_ids in roads_without_speed.items():
+            for linked_id in linked_ids:
+                if linked_id in road_sections:
+                    road_sections[road_id] = road_sections[linked_id]
+                    break
+
+        self._maps[town] = road_sections
+        return road_sections
+
+
+SpeedLimitMapCache = OpenDriveSpeedLimitResolver
 
 
 # ---------------------------------------------------------------------------
@@ -884,22 +957,6 @@ def select_navigation_trigger(
     source_kind = "max_score_earliest"
     phrasing_mode = "at_junction" if winner.is_junction else "approach"
 
-    if winner.is_junction and winner_index > 0:
-        previous_sample = samples[winner_index - 1]
-        if _is_straight_approach_candidate(previous_sample, winner):
-            straight_indices = _collect_straight_approach_indices(samples, winner_index)
-            straight_indices = [
-                idx for idx in straight_indices if samples[idx].distance_m >= min_trigger_distance_m
-            ]
-            if straight_indices and rng.random() < 0.5:
-                winner_index = rng.choice(straight_indices)
-                winner = samples[winner_index]
-                source_kind = "straight_approach_randomized"
-                phrasing_mode = "approach"
-            else:
-                source_kind = "junction_randomized"
-                phrasing_mode = "at_junction"
-
     if winner.distance_m < min_trigger_distance_m:
         candidate_index = _first_valid_trigger_index(samples, min_trigger_distance_m)
         candidate = samples[candidate_index]
@@ -1050,6 +1107,16 @@ def _build_precise_accelerate_instruction(
     }
 
 
+def _build_lane_follow_instruction(rng: random.Random) -> Dict[str, object]:
+    """Build a lane_follow instruction template from INSTRUCTION_LIBRARY."""
+    entry = INSTRUCTION_LIBRARY["lane_follow"]
+    return {
+        "text": rng.choice(entry["texts"]),
+        "command_id": entry["command_id"],
+        "expected_behavior": dict(entry["expected_behavior"]),
+    }
+
+
 def _sample_instruction_template(
     rng: random.Random,
     style: str,
@@ -1118,13 +1185,68 @@ def _build_default_evaluation() -> ET.Element:
 def _sample_accelerate_speed_ms(
     rng: random.Random,
     town: str,
-    position: Tuple[float, float, float],
-    speed_limit_cache: SpeedLimitMapCache,
+    waypoint: "carla.Waypoint",
+    speed_limit_resolver: OpenDriveSpeedLimitResolver,
 ) -> int:
-    speed_limit_kmh = speed_limit_cache.get_speed_limit_kmh(town, position)
-    low_kmh = max(0.0, speed_limit_kmh - 10.0)
-    sampled_kmh = rng.uniform(low_kmh, speed_limit_kmh)
+    speed_limit_kmh = int(
+        round(
+            speed_limit_resolver.get_speed_limit_kmh(
+                town,
+                int(waypoint.road_id),
+                float(waypoint.s),
+            )
+        )
+    )
+    low_kmh = max(0, speed_limit_kmh - 10)
+    sampled_kmh = rng.randint(low_kmh, speed_limit_kmh)
     return int(round(sampled_kmh / 3.6))
+
+
+def _required_acceleration_distance_m(
+    target_speed_ms: float,
+    acceleration_ms2: float = ASSUMED_ACCELERATION_MS2,
+) -> float:
+    """Minimum distance to reach target_speed_ms from rest: d = v²/(2a)."""
+    return (target_speed_ms ** 2) / (2.0 * acceleration_ms2)
+
+
+def _cap_speed_for_distance(
+    target_speed_ms: int,
+    available_distance_m: float,
+    acceleration_ms2: float = ASSUMED_ACCELERATION_MS2,
+) -> int:
+    """Cap target speed to what's achievable in the given distance: v = sqrt(2*a*d). Min 3 m/s."""
+    min_distance = _required_acceleration_distance_m(target_speed_ms, acceleration_ms2)
+    if available_distance_m >= min_distance:
+        return target_speed_ms
+    max_speed = math.sqrt(2.0 * acceleration_ms2 * max(0.0, available_distance_m))
+    return max(3, int(max_speed))
+
+
+def _fit_accelerate_instruction_to_window(
+    target_speed_ms: int,
+    available_distance_m: float,
+    acceleration_ms2: float = ASSUMED_ACCELERATION_MS2,
+) -> Tuple[int, float]:
+    """Cap accelerate instructions to the available distance budget.
+
+    Returns the achievable target speed and the corresponding acceleration
+    duration, clamped so the instruction does not extend past the next primary
+    trigger window.
+    """
+    if available_distance_m <= 0.0:
+        return target_speed_ms, 0.0
+
+    fitted_speed_ms = _cap_speed_for_distance(
+        target_speed_ms,
+        available_distance_m,
+        acceleration_ms2,
+    )
+    fitted_duration_m = min(
+        available_distance_m,
+        _required_acceleration_distance_m(fitted_speed_ms, acceleration_ms2),
+    )
+    return fitted_speed_ms, fitted_duration_m
 
 
 def _select_output_actions(
@@ -1189,18 +1311,25 @@ def _build_route_instructions(
     action: Optional[str] = None,
 ) -> ET.Element:
     instructions_elem = ET.Element("instructions")
-    accelerate_template = _build_precise_accelerate_instruction(
-        rng, target_speed_ms=accelerate_target_speed_ms
-    )
     second_trigger_distance = (
-        special_case.primary_trigger_distance_m if special_case is not None else navigation_trigger.distance_m
+        special_case.primary_trigger_distance_m
+        if special_case is not None
+        else navigation_trigger.distance_m
+    )
+    fitted_speed_ms, accelerate_duration_m = _fit_accelerate_instruction_to_window(
+        accelerate_target_speed_ms,
+        second_trigger_distance,
+        acceleration_ms2=ASSUMED_ACCELERATION_MS2,
+    )
+    accelerate_template = _build_precise_accelerate_instruction(
+        rng, target_speed_ms=fitted_speed_ms
     )
     _append_instruction(
         instructions_elem,
         instruction_id=1,
         trigger_distance_m=0.0,
         template=accelerate_template,
-        duration_meters=second_trigger_distance,
+        duration_meters=accelerate_duration_m,
     )
 
     if special_case is None:
