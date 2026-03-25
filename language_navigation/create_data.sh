@@ -1,4 +1,4 @@
-version="v0.12"
+version="v0.13"
 
 # generate xml files
 python language_navigation/generate_language_xml_route.py \

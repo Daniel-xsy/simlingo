@@ -2,11 +2,15 @@
 """
 Generate language-navigation XML by rebuilding the route from the Bench2Drive
 start point and branching the GT route after the sampled trigger.
+
+This is the main entry point for benchmark XML generation.  Route
+reconstruction, actionability sampling, and instruction chaining are
+delegated to the ``route_builder``, ``actionability``, and ``instructions``
+submodules respectively.
 """
 
 import argparse
 import copy
-import math
 import random
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -21,110 +25,88 @@ except ImportError as exc:
 else:
     CARLA_IMPORT_ERROR = None
 
-try:
-    from language_navigation.utils import (
-        ASSUMED_ACCELERATION_MS2,
-        OpenDriveSpeedLimitResolver,
-        OPTIONAL_LANE_FOLLOW_PROBABILITY,
-        CarlaMapCache,
-        _append_instruction,
-        _build_actionable_navigation_categories,
-        _build_default_evaluation,
-        _build_lane_follow_instruction,
-        _build_precise_accelerate_instruction,
-        _can_change_lane,
-        _compute_turn_category,
-        _fit_accelerate_instruction_to_window,
-        _get_waypoint_positions,
-        _indent_xml_compat,
-        _is_same_direction_lane,
-        _normalize_yaw_delta_deg,
-        _position_at_distance,
-        _route_length_m,
-        _sample_accelerate_speed_ms,
-        _sample_navigation_instruction_for_action,
-    )
-except ImportError:
-    from utils import (  # type: ignore
-        ASSUMED_ACCELERATION_MS2,
-        OpenDriveSpeedLimitResolver,
-        OPTIONAL_LANE_FOLLOW_PROBABILITY,
-        CarlaMapCache,
-        _append_instruction,
-        _build_actionable_navigation_categories,
-        _build_default_evaluation,
-        _build_lane_follow_instruction,
-        _build_precise_accelerate_instruction,
-        _can_change_lane,
-        _compute_turn_category,
-        _fit_accelerate_instruction_to_window,
-        _get_waypoint_positions,
-        _indent_xml_compat,
-        _is_same_direction_lane,
-        _normalize_yaw_delta_deg,
-        _position_at_distance,
-        _route_length_m,
-        _sample_accelerate_speed_ms,
-        _sample_navigation_instruction_for_action,
-    )
+from language_navigation_dev.opendrive import (
+    CarlaMapCache,
+    OpenDriveSpeedLimitResolver,
+)
+from language_navigation_dev.geometry import (
+    _get_waypoint_positions,
+)
+from language_navigation_dev.instructions import (
+    ASSUMED_ACCELERATION_MS2,
+    _append_instruction,
+    _build_lane_follow_instruction,
+    _build_precise_accelerate_instruction,
+    _fit_accelerate_instruction_to_window,
+    _sample_accelerate_speed_ms,
+    _sample_navigation_instruction_for_action,
+)
+from language_navigation_dev.xml_builder import (
+    _build_default_evaluation,
+    _indent_xml_compat,
+)
+from language_navigation_dev.route_builder import (
+    ActionSuffixResult,
+    RebuiltActionabilitySample,
+    RebuiltRoute,
+    RebuiltTrigger,
+    _append_waypoint_if_new,
+    _build_actionability_samples,
+    _build_default_scenarios_from_positions,
+    _build_waypoints_element,
+    _compute_cumulative_distances,
+    _finalize_route,
+    _rebuild_action_suffix,
+    _rebuild_follow_route,
+    _select_output_actions,
+    _select_trigger,
+    _waypoint_position,
+    Position3D,
+)
 
 
-Position3D = Tuple[float, float, float]
-LANE_CHANGE_SETTLE_DISTANCE_M = 15.0
-
-
-@dataclass(frozen=True)
-class RebuiltRoute:
-    waypoints: Tuple["carla.Waypoint", ...]
-    positions: Tuple[Position3D, ...]
-    cumulative_distances_m: Tuple[float, ...]
-    total_length_m: float
-
+# ---------------------------------------------------------------------------
+# Data classes used only by the instruction-building orchestration
+# ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class InstructionSpec:
+    """Specification for a single navigation instruction in a chain.
+
+    Attributes:
+        action: Navigation action name (e.g. ``"turn_left"``).
+        trigger_distance_m: Cumulative distance from route start where
+            the instruction fires.
+        duration_m: Distance the instruction stays active; ``-1`` means
+            "until the end of the route".
+        phrasing_mode: ``"approach"`` or ``"at_junction"``.
+    """
     action: str
-    trigger_distance_m: float  # cumulative distance from route start
-    duration_m: float          # -1 for last instruction
-    phrasing_mode: str         # "approach" or "at_junction"
+    trigger_distance_m: float
+    duration_m: float
+    phrasing_mode: str
 
 
 @dataclass
 class InstructionStep:
+    """A concrete instruction ready to be serialised to XML.
+
+    Attributes:
+        template: Dict with ``text``, ``command_id``, ``expected_behavior``.
+        trigger_distance_m: Cumulative trigger distance.
+        duration_m: Active duration in metres (``-1`` = until end).
+    """
     template: Dict[str, object]
     trigger_distance_m: float
     duration_m: float
 
 
-@dataclass
-class ActionSuffixResult:
-    waypoints: List["carla.Waypoint"]
-    action_end_index: int  # index in waypoints where action completes
-
-
-@dataclass(frozen=True)
-class RebuiltActionabilitySample:
-    index: int
-    distance_m: float
-    position: Position3D
-    actions: Tuple[str, ...]
-    scored_actions: Tuple[str, ...]
-    score: int
-    is_junction: bool
-
-
-@dataclass(frozen=True)
-class RebuiltTrigger:
-    index: int
-    distance_m: float
-    position: Position3D
-    actions: Tuple[str, ...]
-    scored_actions: Tuple[str, ...]
-    is_junction: bool
-    phrasing_mode: str
-
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for the route generator."""
     parser = argparse.ArgumentParser(
         description=(
             "Create language benchmark XMLs from Bench2Drive starts by "
@@ -208,439 +190,34 @@ def parse_args() -> argparse.Namespace:
 
 
 def _require_carla() -> None:
+    """Abort early if the CARLA Python API is not importable."""
     if carla is None:
         raise RuntimeError(
             "CARLA Python API is required for rebuilt route generation."
         ) from CARLA_IMPORT_ERROR
 
 
-def _waypoint_position(waypoint: "carla.Waypoint") -> Position3D:
-    location = waypoint.transform.location
-    return (float(location.x), float(location.y), float(location.z))
-
-
-def _distance_positions(a: Position3D, b: Position3D) -> float:
-    dx = a[0] - b[0]
-    dy = a[1] - b[1]
-    dz = a[2] - b[2]
-    return (dx * dx + dy * dy + dz * dz) ** 0.5
-
-
-def _distance_waypoints(a: "carla.Waypoint", b: "carla.Waypoint") -> float:
-    return a.transform.location.distance(b.transform.location)
-
-
-def _append_waypoint_if_new(route_waypoints: List["carla.Waypoint"], waypoint: "carla.Waypoint") -> None:
-    if not route_waypoints:
-        route_waypoints.append(waypoint)
-        return
-    prev = route_waypoints[-1]
-    if _distance_waypoints(prev, waypoint) <= 1e-3:
-        return
-    route_waypoints.append(waypoint)
-
-
-def _follow_score(current_waypoint: "carla.Waypoint", candidate: "carla.Waypoint") -> Tuple[float, int, int, float]:
-    yaw_delta = abs(
-        _normalize_yaw_delta_deg(
-            candidate.transform.rotation.yaw - current_waypoint.transform.rotation.yaw
-        )
-    )
-    same_road_penalty = 0 if candidate.road_id == current_waypoint.road_id else 1
-    lane_delta = abs(abs(candidate.lane_id) - abs(current_waypoint.lane_id))
-    return (
-        yaw_delta,
-        same_road_penalty,
-        lane_delta,
-        _distance_waypoints(current_waypoint, candidate),
-    )
-
-
-def _select_follow_road_successor(
-    current_waypoint: "carla.Waypoint",
-    candidates: Sequence["carla.Waypoint"],
-) -> "carla.Waypoint":
-    if not candidates:
-        raise ValueError("Cannot select follow-road successor from empty candidate list.")
-    return min(candidates, key=lambda waypoint: _follow_score(current_waypoint, waypoint))
-
-
-def _trace_candidate_turn(
-    approach_waypoint: "carla.Waypoint",
-    candidate: "carla.Waypoint",
-    step_m: float,
-    max_scan_distance_m: float = 40.0,
-) -> str:
-    traversed = _distance_waypoints(approach_waypoint, candidate)
-    branch_waypoint = candidate
-
-    while traversed < max_scan_distance_m:
-        next_candidates = branch_waypoint.next(step_m)
-        if not next_candidates:
-            break
-        next_waypoint = _select_follow_road_successor(branch_waypoint, next_candidates)
-        traversed += _distance_waypoints(branch_waypoint, next_waypoint)
-        branch_waypoint = next_waypoint
-        if not branch_waypoint.is_junction and traversed >= step_m:
-            break
-
-    return _compute_turn_category(approach_waypoint, branch_waypoint)
-
-
-def _select_turn_successor(
-    approach_waypoint: "carla.Waypoint",
-    current_waypoint: "carla.Waypoint",
-    candidates: Sequence["carla.Waypoint"],
-    desired_action: str,
-    step_m: float,
-) -> Optional["carla.Waypoint"]:
-    matching = [
-        candidate
-        for candidate in candidates
-        if _trace_candidate_turn(approach_waypoint, candidate, step_m) == desired_action
-    ]
-    if not matching:
-        return None
-    return min(matching, key=lambda waypoint: _follow_score(current_waypoint, waypoint))
-
-
-def _compute_cumulative_distances(positions: Sequence[Position3D]) -> Tuple[float, ...]:
-    cumulative = [0.0]
-    for idx in range(1, len(positions)):
-        cumulative.append(cumulative[-1] + _distance_positions(positions[idx - 1], positions[idx]))
-    return tuple(cumulative)
-
-
-def _resample_positions(positions: Sequence[Position3D], step_m: float) -> List[Position3D]:
-    if not positions:
-        return []
-
-    deduped = [positions[0]]
-    for position in positions[1:]:
-        if _distance_positions(deduped[-1], position) > 1e-3:
-            deduped.append(position)
-
-    if len(deduped) == 1:
-        return deduped
-
-    total_length = _route_length_m(deduped)
-    distances = [0.0]
-    current = step_m
-    while current < total_length - 1e-6:
-        distances.append(current)
-        current += step_m
-    if total_length > 1e-6:
-        distances.append(total_length)
-
-    return [_position_at_distance(deduped, distance_m) for distance_m in distances]
-
-
-def _finalize_route(
-    route_waypoints: Sequence["carla.Waypoint"],
-    step_m: float,
-    resample: bool = False,
-) -> RebuiltRoute:
-    raw_positions = [_waypoint_position(waypoint) for waypoint in route_waypoints]
-    positions = _resample_positions(raw_positions, step_m) if resample else list(raw_positions)
-    cumulative_distances = _compute_cumulative_distances(positions)
-    total_length = cumulative_distances[-1] if cumulative_distances else 0.0
-    return RebuiltRoute(
-        waypoints=tuple(route_waypoints),
-        positions=tuple(positions),
-        cumulative_distances_m=cumulative_distances,
-        total_length_m=total_length,
-    )
-
-
-def _rebuild_follow_route(
-    start_waypoint: "carla.Waypoint",
-    max_distance_m: float,
-    step_m: float,
-) -> RebuiltRoute:
-    route_waypoints = [start_waypoint]
-    current_waypoint = start_waypoint
-    traveled = 0.0
-
-    while traveled + 1e-6 < max_distance_m:
-        next_candidates = current_waypoint.next(step_m)
-        if not next_candidates:
-            break
-        next_waypoint = _select_follow_road_successor(current_waypoint, next_candidates)
-        segment_distance = _distance_waypoints(current_waypoint, next_waypoint)
-        if segment_distance <= 1e-3:
-            break
-        traveled += segment_distance
-        _append_waypoint_if_new(route_waypoints, next_waypoint)
-        current_waypoint = next_waypoint
-
-    return _finalize_route(route_waypoints, step_m)
-
-
-def _rebuild_turn_suffix(
-    start_waypoint: "carla.Waypoint",
-    desired_action: str,
-    max_distance_m: float,
-    step_m: float,
-) -> Optional[ActionSuffixResult]:
-    route_waypoints = [start_waypoint]
-    current_waypoint = start_waypoint
-    traveled = 0.0
-    approach_waypoint: Optional["carla.Waypoint"] = None
-    entered_junction = False
-    first_exit_waypoint: Optional["carla.Waypoint"] = None
-    action_end_index: Optional[int] = None
-    branch_selected = False
-
-    while traveled + 1e-6 < max_distance_m:
-        next_candidates = current_waypoint.next(step_m)
-        if not next_candidates:
-            break
-
-        near_junction = current_waypoint.is_junction or any(
-            candidate.is_junction for candidate in next_candidates
-        )
-        if near_junction and approach_waypoint is None:
-            approach_waypoint = current_waypoint
-
-        if near_junction and len(next_candidates) > 1 and not branch_selected:
-            selected_waypoint = _select_turn_successor(
-                approach_waypoint or current_waypoint,
-                current_waypoint,
-                next_candidates,
-                desired_action,
-                step_m,
-            )
-            if selected_waypoint is None:
-                return None
-            branch_selected = True
-        else:
-            selected_waypoint = _select_follow_road_successor(current_waypoint, next_candidates)
-
-        segment_distance = _distance_waypoints(current_waypoint, selected_waypoint)
-        if segment_distance <= 1e-3:
-            break
-        if traveled + segment_distance > max_distance_m + 1e-6:
-            break
-
-        traveled += segment_distance
-        previous_waypoint = current_waypoint
-        current_waypoint = selected_waypoint
-        _append_waypoint_if_new(route_waypoints, current_waypoint)
-
-        if current_waypoint.is_junction:
-            entered_junction = True
-        if entered_junction and not current_waypoint.is_junction and previous_waypoint.is_junction:
-            first_exit_waypoint = current_waypoint
-            action_end_index = len(route_waypoints) - 1
-            break
-
-    if approach_waypoint is None:
-        return None
-
-    validation_waypoint = first_exit_waypoint or route_waypoints[-1]
-    if _compute_turn_category(approach_waypoint, validation_waypoint) != desired_action:
-        return None
-
-    if action_end_index is None:
-        action_end_index = len(route_waypoints) - 1
-
-    while traveled + 1e-6 < max_distance_m:
-        next_candidates = current_waypoint.next(step_m)
-        if not next_candidates:
-            break
-        selected_waypoint = _select_follow_road_successor(current_waypoint, next_candidates)
-        segment_distance = _distance_waypoints(current_waypoint, selected_waypoint)
-        if segment_distance <= 1e-3 or traveled + segment_distance > max_distance_m + 1e-6:
-            break
-        traveled += segment_distance
-        current_waypoint = selected_waypoint
-        _append_waypoint_if_new(route_waypoints, current_waypoint)
-
-    return ActionSuffixResult(
-        waypoints=route_waypoints,
-        action_end_index=action_end_index,
-    )
-
-
-def _rebuild_lane_change_suffix(
-    start_waypoint: "carla.Waypoint",
-    direction: str,
-    max_distance_m: float,
-    step_m: float,
-    prep_distance_m: float,
-) -> Optional[ActionSuffixResult]:
-    if not _can_change_lane(start_waypoint, direction):
-        return None
-
-    route_waypoints = [start_waypoint]
-    current_waypoint = start_waypoint
-    traveled = 0.0
-    prep_target = min(prep_distance_m, max_distance_m)
-
-    while traveled + 1e-6 < prep_target:
-        if current_waypoint.is_junction:
-            return None
-        next_candidates = current_waypoint.next(step_m)
-        if not next_candidates or any(candidate.is_junction for candidate in next_candidates):
-            return None
-        next_waypoint = _select_follow_road_successor(current_waypoint, next_candidates)
-        segment_distance = _distance_waypoints(current_waypoint, next_waypoint)
-        if segment_distance <= 1e-3 or traveled + segment_distance > max_distance_m + 1e-6:
-            break
-        traveled += segment_distance
-        current_waypoint = next_waypoint
-        _append_waypoint_if_new(route_waypoints, current_waypoint)
-
-    if not _can_change_lane(current_waypoint, direction):
-        return None
-
-    adjacent_waypoint = (
-        current_waypoint.get_left_lane()
-        if direction == "left"
-        else current_waypoint.get_right_lane()
-    )
-    if adjacent_waypoint is None:
-        return None
-    if adjacent_waypoint.lane_type != carla.LaneType.Driving:
-        return None
-    if not _is_same_direction_lane(current_waypoint, adjacent_waypoint):
-        return None
-
-    lane_change_distance = _distance_waypoints(current_waypoint, adjacent_waypoint)
-    if traveled + lane_change_distance > max_distance_m + 1e-6:
-        return None
-
-    traveled += lane_change_distance
-    current_waypoint = adjacent_waypoint
-    _append_waypoint_if_new(route_waypoints, current_waypoint)
-    post_change_traveled = 0.0
-    action_end_index: Optional[int] = None
-
-    while traveled + 1e-6 < max_distance_m:
-        next_candidates = current_waypoint.next(step_m)
-        if not next_candidates:
-            break
-        next_waypoint = _select_follow_road_successor(current_waypoint, next_candidates)
-        segment_distance = _distance_waypoints(current_waypoint, next_waypoint)
-        if segment_distance <= 1e-3 or traveled + segment_distance > max_distance_m + 1e-6:
-            break
-        traveled += segment_distance
-        post_change_traveled += segment_distance
-        current_waypoint = next_waypoint
-        _append_waypoint_if_new(route_waypoints, current_waypoint)
-        if action_end_index is None and post_change_traveled >= LANE_CHANGE_SETTLE_DISTANCE_M - 1e-6:
-            action_end_index = len(route_waypoints) - 1
-
-    if action_end_index is None:
-        action_end_index = len(route_waypoints) - 1
-
-    return ActionSuffixResult(
-        waypoints=route_waypoints,
-        action_end_index=action_end_index,
-    )
-
-
-def _rebuild_action_suffix(
-    start_waypoint: "carla.Waypoint",
-    action: str,
-    max_distance_m: float,
-    step_m: float,
-    lane_change_prep_m: float,
-) -> Optional[ActionSuffixResult]:
-    if action == "lane_follow":
-        follow_route = _rebuild_follow_route(start_waypoint, max_distance_m, step_m)
-        return ActionSuffixResult(
-            waypoints=list(follow_route.waypoints),
-            action_end_index=len(follow_route.waypoints) - 1,
-        )
-    if action == "lane_change_left":
-        return _rebuild_lane_change_suffix(
-            start_waypoint, "left", max_distance_m, step_m, lane_change_prep_m
-        )
-    if action == "lane_change_right":
-        return _rebuild_lane_change_suffix(
-            start_waypoint, "right", max_distance_m, step_m, lane_change_prep_m
-        )
-    if action in ("turn_left", "turn_right", "turn_straight"):
-        return _rebuild_turn_suffix(start_waypoint, action, max_distance_m, step_m)
-    raise ValueError(f"Unsupported action: {action}")
-
-
-def _build_actionability_samples(
-    route: RebuiltRoute,
+def _resolve_start_waypoint(
+    positions: Sequence[Position3D],
     carla_map: "carla.Map",
-) -> List[RebuiltActionabilitySample]:
-    samples: List[RebuiltActionabilitySample] = []
-    for index, position in enumerate(route.positions):
-        distance_m = route.cumulative_distances_m[index]
-        remaining_distance_m = max(route.total_length_m - distance_m, 0.0)
-        actions = _build_actionable_navigation_categories(
-            carla_map,
-            position,
-            max_turn_scan_distance_m=remaining_distance_m,
-        )
-        scored_actions = tuple(action for action in actions if action != "lane_follow")
-        waypoint = carla_map.get_waypoint(
-            carla.Location(x=position[0], y=position[1], z=position[2]),
-            project_to_road=True,
-            lane_type=carla.LaneType.Driving,
-        )
-        samples.append(
-            RebuiltActionabilitySample(
-                index=index,
-                distance_m=distance_m,
-                position=position,
-                actions=tuple(actions),
-                scored_actions=scored_actions,
-                score=len(scored_actions),
-                is_junction=bool(waypoint.is_junction) if waypoint is not None else False,
-            )
-        )
-    return samples
-
-
-def _find_first_junction_distance_m(route: RebuiltRoute) -> Optional[float]:
-    """Return cumulative distance to the first junction entrance, or None if no junction."""
-    for i, wp in enumerate(route.waypoints):
-        if wp.is_junction:
-            return route.cumulative_distances_m[i]
-    return None
-
-
-def _select_output_actions(actions: Sequence[str], rng: random.Random) -> List[str]:
-    unique_actions: List[str] = []
-    for action in actions:
-        if action not in unique_actions:
-            unique_actions.append(action)
-
-    retained = [action for action in unique_actions if action != "lane_follow"]
-    if "lane_follow" in unique_actions:
-        if not retained or rng.random() < OPTIONAL_LANE_FOLLOW_PROBABILITY:
-            retained.append("lane_follow")
-    return retained
-
-
-def _select_trigger(
-    samples: Sequence[RebuiltActionabilitySample],
-    min_trigger_distance_m: float = 5.0,
-) -> Optional[RebuiltTrigger]:
-    valid_samples = [sample for sample in samples if sample.distance_m >= min_trigger_distance_m]
-    if not valid_samples:
-        return None
-
-    best_score = max(sample.score for sample in valid_samples)
-    winner = next(sample for sample in valid_samples if sample.score == best_score)
-
-    return RebuiltTrigger(
-        index=winner.index,
-        distance_m=winner.distance_m,
-        position=winner.position,
-        actions=winner.actions,
-        scored_actions=winner.scored_actions,
-        is_junction=winner.is_junction,
-        phrasing_mode="at_junction" if winner.is_junction else "approach",
+) -> "carla.Waypoint":
+    """Project the first route position onto the nearest CARLA driving waypoint."""
+    if not positions:
+        raise ValueError("Bench2Drive route has no start waypoint.")
+    start = positions[0]
+    waypoint = carla_map.get_waypoint(
+        carla.Location(x=start[0], y=start[1], z=start[2]),
+        project_to_road=True,
+        lane_type=carla.LaneType.Driving,
     )
+    if waypoint is None:
+        raise ValueError(f"Could not project start point {start} to a driving waypoint.")
+    return waypoint
 
+
+# ---------------------------------------------------------------------------
+# Recursive instruction-chain builder
+# ---------------------------------------------------------------------------
 
 def _build_instruction_chain(
     start_waypoint: "carla.Waypoint",
@@ -654,19 +231,22 @@ def _build_instruction_chain(
     previous_trigger_distance_m: Optional[float] = None,
     max_depth: int = 5,
 ) -> Tuple[List["carla.Waypoint"], List[InstructionSpec]]:
-    """
-    Recursively build waypoints and instruction specs.
+    """Recursively build waypoints and instruction specs.
+
+    Starting from *start_waypoint*, rebuild a follow route, find the best
+    trigger, execute the selected action, and recurse from the action's end
+    point until *max_depth* is exhausted or no interesting trigger remains.
 
     Returns:
-        all_waypoints: chained waypoints from start_waypoint
-        specs: list of InstructionSpec for each navigation action
+        ``(all_waypoints, specs)`` — the chained waypoints and a list of
+        ``InstructionSpec`` for each navigation action.
     """
-    # Build a follow route from start_waypoint
+    # Build a follow route from start_waypoint.
     follow_route = _rebuild_follow_route(start_waypoint, remaining_distance_m, step_m)
     if len(follow_route.waypoints) < 2:
         return list(follow_route.waypoints), []
 
-    # Compute actionability samples on this follow route
+    # Compute actionability samples on this follow route.
     samples = _build_actionability_samples(follow_route, carla_map)
     if previous_trigger_distance_m is not None:
         effective_min_trigger_distance_m = max(
@@ -676,29 +256,24 @@ def _build_instruction_chain(
     else:
         effective_min_trigger_distance_m = 0.0
     eligible_samples = [
-        sample
-        for sample in samples
-        if sample.distance_m >= max(0.0, effective_min_trigger_distance_m)
+        s for s in samples
+        if s.distance_m >= max(0.0, effective_min_trigger_distance_m)
     ]
     if not eligible_samples:
         return list(follow_route.waypoints), []
-    trigger = _select_trigger(
-        eligible_samples,
-        min_trigger_distance_m=0.0,
-    )
+    trigger = _select_trigger(eligible_samples, min_trigger_distance_m=0.0)
     if trigger is None:
         return list(follow_route.waypoints), []
 
-    # Check for interesting (non-lane_follow) actions
+    # Check for interesting (non-lane_follow) actions.
     interesting_actions = [a for a in trigger.actions if a != "lane_follow"]
-
     if not interesting_actions or max_depth <= 0:
         return list(follow_route.waypoints), []
 
-    # Pick one non-lane_follow action
+    # Pick one non-lane_follow action.
     action = rng.choice(interesting_actions)
 
-    # Build action suffix from trigger waypoint
+    # Build action suffix from trigger waypoint.
     trigger_waypoint = follow_route.waypoints[trigger.index]
     suffix_remaining_m = max(0.0, remaining_distance_m - trigger.distance_m)
     suffix_result = _rebuild_action_suffix(
@@ -709,12 +284,10 @@ def _build_instruction_chain(
         lane_change_prep_m=lane_change_prep_m,
     )
     if suffix_result is None:
-        # Action failed; terminate the chain instead of inserting a dense fallback prompt.
         return list(follow_route.waypoints), []
 
-    # Compute distances within suffix to find action_end distance
+    # Compute distances within suffix to find action_end distance.
     action_end_waypoint = suffix_result.waypoints[suffix_result.action_end_index]
-    # Distance from trigger to action end
     action_segment_positions = [
         _waypoint_position(wp)
         for wp in suffix_result.waypoints[: suffix_result.action_end_index + 1]
@@ -722,26 +295,22 @@ def _build_instruction_chain(
     action_segment_distances = _compute_cumulative_distances(action_segment_positions)
     trigger_to_action_end_m = action_segment_distances[-1] if action_segment_distances else 0.0
 
-    # Build prefix waypoints (start -> trigger) + action segment (trigger -> action_end)
+    # Build prefix waypoints (start → trigger) + action segment.
     prefix_waypoints = list(follow_route.waypoints[: trigger.index + 1])
     action_waypoints = list(suffix_result.waypoints[1: suffix_result.action_end_index + 1])
 
-    # Cumulative distances for this instruction
     abs_trigger_distance_m = cumulative_distance_m + trigger.distance_m
     abs_action_end_distance_m = abs_trigger_distance_m + trigger_to_action_end_m
-
-    # Remaining distance after action end
     new_remaining_m = remaining_distance_m - trigger.distance_m - trigger_to_action_end_m
 
-    # Build the current instruction spec (duration set later depending on recursion)
     current_spec = InstructionSpec(
         action=action,
         trigger_distance_m=abs_trigger_distance_m,
-        duration_m=trigger_to_action_end_m,  # will be overridden to -1 if last
+        duration_m=trigger_to_action_end_m,
         phrasing_mode=trigger.phrasing_mode,
     )
 
-    # Try to recurse if enough remaining distance
+    # Try to recurse if enough remaining distance.
     if new_remaining_m > 0.0 and max_depth > 1:
         tail_waypoints, tail_specs = _build_instruction_chain(
             start_waypoint=action_end_waypoint,
@@ -756,76 +325,29 @@ def _build_instruction_chain(
             max_depth=max_depth - 1,
         )
 
-        # Merge waypoints: prefix + action_segment + tail (skip first of tail, it's action_end)
+        # Merge waypoints: prefix + action_segment + tail.
         merged_waypoints = prefix_waypoints + action_waypoints
         for wp in tail_waypoints[1:]:
             _append_waypoint_if_new(merged_waypoints, wp)
 
         return merged_waypoints, [current_spec] + tail_specs
     else:
-        # Last instruction: set duration to -1
+        # Last instruction: set duration to -1.
         final_spec = InstructionSpec(
             action=current_spec.action,
             trigger_distance_m=current_spec.trigger_distance_m,
             duration_m=-1.0,
             phrasing_mode=current_spec.phrasing_mode,
         )
-        # Use the full suffix waypoints (includes post-action follow)
         merged_waypoints = prefix_waypoints
         for wp in suffix_result.waypoints[1:]:
             _append_waypoint_if_new(merged_waypoints, wp)
         return merged_waypoints, [final_spec]
 
 
-def _build_waypoints_element(positions: Sequence[Position3D]) -> ET.Element:
-    if not positions:
-        raise ValueError("Cannot build <waypoints> from an empty route.")
-
-    waypoints_elem = ET.Element("waypoints")
-    for x, y, z in positions:
-        ET.SubElement(
-            waypoints_elem,
-            "position",
-            {
-                "x": f"{x:.1f}",
-                "y": f"{y:.1f}",
-                "z": f"{z:.1f}",
-            },
-        )
-    return waypoints_elem
-
-
-def _build_default_scenarios_from_positions(positions: Sequence[Position3D]) -> ET.Element:
-    if not positions:
-        raise ValueError("Cannot build scenarios from an empty route.")
-
-    x0, y0, z0 = positions[0]
-    yaw_deg = 0.0
-    if len(positions) >= 2:
-        x1, y1, _ = positions[1]
-        dy = y1 - y0
-        dx = x1 - x0
-        if abs(dx) > 1e-6 or abs(dy) > 1e-6:
-            yaw_deg = math.degrees(math.atan2(dy, dx))
-
-    scenarios_elem = ET.Element("scenarios")
-    scenario_elem = ET.SubElement(
-        scenarios_elem,
-        "scenario",
-        {"name": "FreeRide_1", "type": "FreeRide"},
-    )
-    ET.SubElement(
-        scenario_elem,
-        "trigger_point",
-        {
-            "x": f"{x0:.1f}",
-            "y": f"{y0:.1f}",
-            "z": f"{z0:.1f}",
-            "yaw": f"{yaw_deg:.1f}",
-        },
-    )
-    return scenarios_elem
-
+# ---------------------------------------------------------------------------
+# Instruction step / XML builders
+# ---------------------------------------------------------------------------
 
 def _build_instruction_steps(
     rng: random.Random,
@@ -833,12 +355,17 @@ def _build_instruction_steps(
     accel_target_speed_ms: int,
     accel_duration_m: float,
 ) -> List[InstructionStep]:
+    """Convert ``InstructionSpec`` objects into concrete ``InstructionStep`` objects.
+
+    Always places a speed instruction at distance 0, then fills gaps between
+    navigation instructions with ``lane_follow`` fillers.
+    """
     if not instruction_specs:
         return []
 
     instruction_steps: List[InstructionStep] = []
 
-    # Always place speed instruction at distance 0
+    # Speed instruction at the start.
     speed_template = _build_precise_accelerate_instruction(
         rng, target_speed_ms=accel_target_speed_ms
     )
@@ -850,11 +377,10 @@ def _build_instruction_steps(
         )
     )
 
-    # Track where the previous instruction ends
     prev_end_m = accel_duration_m
 
     for spec in instruction_specs:
-        # Insert lane_follow filler if there's a gap before this nav trigger
+        # Insert lane_follow filler if there is a significant gap.
         gap_m = spec.trigger_distance_m - prev_end_m
         if gap_m > 10.0:
             instruction_steps.append(
@@ -865,7 +391,7 @@ def _build_instruction_steps(
                 )
             )
 
-        # Insert the navigation instruction
+        # The actual navigation instruction.
         instruction_steps.append(
             InstructionStep(
                 template=_sample_navigation_instruction_for_action(
@@ -878,7 +404,6 @@ def _build_instruction_steps(
             )
         )
 
-        # Update prev_end_m (duration_m=-1 means last instruction, no end)
         if spec.duration_m > 0:
             prev_end_m = spec.trigger_distance_m + spec.duration_m
 
@@ -888,6 +413,7 @@ def _build_instruction_steps(
 def _build_instructions_from_steps(
     instruction_steps: Sequence[InstructionStep],
 ) -> ET.Element:
+    """Serialise ``InstructionStep`` objects into an ``<instructions>`` XML element."""
     instructions_elem = ET.Element("instructions")
     for instruction_id, step in enumerate(instruction_steps, start=1):
         _append_instruction(
@@ -906,6 +432,7 @@ def _build_route_instructions(
     trigger: RebuiltTrigger,
     action: str,
 ) -> ET.Element:
+    """Build a simple two-instruction XML block (accelerate + navigate)."""
     instructions_elem = ET.Element("instructions")
     fitted_speed_ms, accelerate_duration_m = _fit_accelerate_instruction_to_window(
         accelerate_target_speed_ms,
@@ -946,11 +473,20 @@ def _build_chained_route_instructions(
     post_action_accelerate_trigger_m: Optional[float] = None,
     post_action_accelerate_duration_m: Optional[float] = None,
 ) -> ET.Element:
+    """Build a multi-instruction XML block for chained navigation.
+
+    Two modes:
+        * ``use_lane_follow_start=True`` — starts with a lane-follow filler,
+          then the first navigation action, optionally a post-action
+          accelerate, then remaining navigation actions.
+        * ``use_lane_follow_start=False`` (default) — starts with an
+          accelerate instruction, then all navigation actions in sequence.
+    """
     instructions_elem = ET.Element("instructions")
     next_id = 1
 
     if use_lane_follow_start:
-        # Instruction 1: lane_follow until first action
+        # Lane-follow until first action.
         lane_follow_template = _build_lane_follow_instruction(rng)
         _append_instruction(
             instructions_elem,
@@ -961,7 +497,6 @@ def _build_chained_route_instructions(
         )
         next_id += 1
 
-        # Instruction 2: first nav action
         first_spec = instruction_specs[0]
         nav_template = _sample_navigation_instruction_for_action(
             rng, action=first_spec.action, phrasing_mode=first_spec.phrasing_mode
@@ -975,7 +510,7 @@ def _build_chained_route_instructions(
         )
         next_id += 1
 
-        # Instruction 3 (optional): post-action accelerate
+        # Optional post-action accelerate.
         if (
             post_action_accelerate_speed_ms is not None
             and post_action_accelerate_trigger_m is not None
@@ -999,7 +534,7 @@ def _build_chained_route_instructions(
             )
             next_id += 1
 
-        # Remaining nav actions from instruction_specs[1:]
+        # Remaining nav actions.
         for spec in instruction_specs[1:]:
             nav_template = _sample_navigation_instruction_for_action(
                 rng, action=spec.action, phrasing_mode=spec.phrasing_mode
@@ -1013,7 +548,7 @@ def _build_chained_route_instructions(
             )
             next_id += 1
     else:
-        # Normal path: accelerate first
+        # Normal path: accelerate first.
         fitted_speed_ms, accelerate_duration_m = _fit_accelerate_instruction_to_window(
             accelerate_target_speed_ms,
             first_trigger_distance_m,
@@ -1031,7 +566,6 @@ def _build_chained_route_instructions(
         )
         next_id += 1
 
-        # Instructions 2..N: navigation actions
         for spec in instruction_specs:
             nav_template = _sample_navigation_instruction_for_action(
                 rng, action=spec.action, phrasing_mode=spec.phrasing_mode
@@ -1047,6 +581,10 @@ def _build_chained_route_instructions(
 
     return instructions_elem
 
+
+# ---------------------------------------------------------------------------
+# Full route XML tree builder (rebuilt path)
+# ---------------------------------------------------------------------------
 
 def _build_action_route_tree(
     src_route: ET.Element,
@@ -1065,6 +603,13 @@ def _build_action_route_tree(
     post_action_accelerate_trigger_m: Optional[float] = None,
     post_action_accelerate_duration_m: Optional[float] = None,
 ) -> ET.Element:
+    """Assemble the complete ``<routes>`` XML tree for a rebuilt route.
+
+    Supports three instruction modes (checked in order):
+        1. Pre-built ``instruction_steps``.
+        2. ``instruction_specs`` with ``first_trigger_distance_m``.
+        3. A single ``trigger`` for a simple two-instruction layout.
+    """
     src_id = src_route.attrib.get("id", "unknown")
     root = ET.Element("routes")
     route_attrib = {
@@ -1076,11 +621,7 @@ def _build_action_route_tree(
     }
     if force_all_green_traffic_lights:
         route_attrib["force_all_green_traffic_lights"] = "true"
-    target_route = ET.SubElement(
-        root,
-        "route",
-        route_attrib,
-    )
+    target_route = ET.SubElement(root, "route", route_attrib)
 
     target_route.append(_build_waypoints_element(final_route.positions))
 
@@ -1122,22 +663,9 @@ def _build_action_route_tree(
     return root
 
 
-def _resolve_start_waypoint(
-    positions: Sequence[Position3D],
-    carla_map: "carla.Map",
-) -> "carla.Waypoint":
-    if not positions:
-        raise ValueError("Bench2Drive route has no start waypoint.")
-    start = positions[0]
-    waypoint = carla_map.get_waypoint(
-        carla.Location(x=start[0], y=start[1], z=start[2]),
-        project_to_road=True,
-        lane_type=carla.LaneType.Driving,
-    )
-    if waypoint is None:
-        raise ValueError(f"Could not project start point {start} to a driving waypoint.")
-    return waypoint
-
+# ---------------------------------------------------------------------------
+# Main conversion logic
+# ---------------------------------------------------------------------------
 
 def convert_file(
     input_xml: Path,
@@ -1153,6 +681,16 @@ def convert_file(
     max_chain_depth: int = 5,
     min_chain_trigger_gap_m: float = 25.0,
 ) -> List[Path]:
+    """Convert one Bench2Drive XML into per-action language benchmark XMLs.
+
+    For each route in the input file:
+        1. Rebuild a follow route from the start waypoint.
+        2. Sample actionability and select a trigger.
+        3. For each feasible action, build an action suffix, chain
+           subsequent instructions, and write the output XML.
+
+    Returns the list of written file paths.
+    """
     tree = ET.parse(input_xml)
     source_root = tree.getroot()
     if source_root.tag != "routes":
@@ -1175,6 +713,7 @@ def convert_file(
         if route_town is None:
             raise ValueError(f"Route {src_id} has no town attribute.")
 
+        # Deterministic per-route RNG.
         route_rng_seed = (
             f"{seed}:{input_xml.stem}:{src_id}:{route_index}"
             if seed is not None
@@ -1185,9 +724,7 @@ def convert_file(
 
         start_waypoint = _resolve_start_waypoint(source_positions, carla_map)
 
-        # Compute acceleration at start.  Cap the speed so that the
-        # acceleration distance fits within the route, leaving room for at
-        # least one navigation trigger after it.
+        # Sample and cap the acceleration speed.
         sampled_speed_ms = _sample_accelerate_speed_ms(
             route_rng,
             town=route_town,
@@ -1199,6 +736,7 @@ def convert_file(
             available_distance_m=max_distance_m,
         )
 
+        # Rebuild base route and find the best trigger.
         base_route = _rebuild_follow_route(start_waypoint, max_distance_m, route_step_m)
         samples = _build_actionability_samples(base_route, carla_map)
         trigger = _select_trigger(samples, min_trigger_distance_m=accel_distance_m)
@@ -1220,7 +758,7 @@ def convert_file(
 
         stem_prefix = input_xml.stem if not multiple_routes else f"{input_xml.stem}_{src_id}"
         for action in output_actions:
-            # Build the first action suffix
+            # Build the first action suffix.
             suffix_result = _rebuild_action_suffix(
                 start_waypoint=trigger_waypoint,
                 action=action,
@@ -1232,7 +770,7 @@ def convert_file(
                 print(f"[INFO] Route {src_id}: action {action} became invalid after rebuild.")
                 continue
 
-            # Compute distance from trigger to action end for the first action
+            # Compute distance from trigger to action end.
             first_action_positions = [
                 _waypoint_position(wp)
                 for wp in suffix_result.waypoints[: suffix_result.action_end_index + 1]
@@ -1245,7 +783,6 @@ def convert_file(
             action_end_waypoint = suffix_result.waypoints[suffix_result.action_end_index]
             new_remaining_m = remaining_distance_m - first_trigger_to_action_end_m
 
-            # Build instruction chain starting from action end
             first_spec = InstructionSpec(
                 action=action,
                 trigger_distance_m=trigger.distance_m,
@@ -1253,6 +790,7 @@ def convert_file(
                 phrasing_mode=trigger.phrasing_mode,
             )
 
+            # Build instruction chain from action end.
             if new_remaining_m > 0.0 and max_chain_depth > 1:
                 abs_action_end_m = trigger.distance_m + first_trigger_to_action_end_m
                 tail_waypoints, tail_specs = _build_instruction_chain(
@@ -1268,7 +806,6 @@ def convert_file(
                     max_depth=max_chain_depth - 1,
                 )
 
-                # Merge: prefix + first action segment + tail
                 action_segment = list(
                     suffix_result.waypoints[1: suffix_result.action_end_index + 1]
                 )
@@ -1278,11 +815,10 @@ def convert_file(
 
                 all_specs = [first_spec] + tail_specs
             else:
-                # Single action, no chaining — use full suffix
+                # Single action, no chaining.
                 merged_waypoints = list(prefix_waypoints)
                 for wp in suffix_result.waypoints[1:]:
                     _append_waypoint_if_new(merged_waypoints, wp)
-                # Mark as last instruction
                 first_spec = InstructionSpec(
                     action=action,
                     trigger_distance_m=trigger.distance_m,
@@ -1291,7 +827,7 @@ def convert_file(
                 )
                 all_specs = [first_spec]
 
-            # Ensure the last spec has duration_m=-1
+            # Ensure the last spec has duration_m=-1.
             if all_specs and all_specs[-1].duration_m != -1.0:
                 last = all_specs[-1]
                 all_specs[-1] = InstructionSpec(
@@ -1328,13 +864,18 @@ def convert_file(
     return written_paths
 
 
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
 def main() -> None:
+    """CLI entry point: parse args, set up caches, convert files."""
     _require_carla()
     args = parse_args()
     input_path = args.input_xml.resolve()
 
     xodr_roots = (
-        None if args.xodr_root is None else [path.expanduser().resolve() for path in args.xodr_root]
+        None if args.xodr_root is None else [p.expanduser().resolve() for p in args.xodr_root]
     )
     map_cache = CarlaMapCache(xodr_search_roots=xodr_roots)
     speed_limit_resolver = OpenDriveSpeedLimitResolver(xodr_search_roots=xodr_roots)
