@@ -297,19 +297,31 @@ def _sample_navigation_instruction_for_action(
 def _build_precise_accelerate_instruction(
     rng: random.Random,
     target_speed_ms: int,
+    keep_straight: bool = False,
 ) -> Dict[str, object]:
     """Build a ``target_speed`` instruction template for a precise speed.
 
     Randomly picks one of several phrasing styles (e.g. "accelerate to …",
-    "set your speed to …").
+    "set your speed to …"). When ``keep_straight`` is set, the sampled
+    phrasing explicitly asks the agent to keep straight while matching the
+    target speed.
     """
-    text = rng.choice(
-        [
-            f"accelerate to {target_speed_ms} m/s",
-            f"set your speed to {target_speed_ms} m/s",
-            f"reach {target_speed_ms} m/s",
-        ]
-    )
+    if keep_straight:
+        text = rng.choice(
+            [
+                f"keep straight and set your speed to {target_speed_ms} m/s",
+                f"stay straight and reach {target_speed_ms} m/s",
+                f"continue straight and accelerate to {target_speed_ms} m/s",
+            ]
+        )
+    else:
+        text = rng.choice(
+            [
+                f"accelerate to {target_speed_ms} m/s",
+                f"set your speed to {target_speed_ms} m/s",
+                f"reach {target_speed_ms} m/s",
+            ]
+        )
     return {
         "text": text,
         "command_id": -1,

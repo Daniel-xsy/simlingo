@@ -29,6 +29,10 @@ from language_navigation.opendrive import (
     CarlaMapCache,
     OpenDriveSpeedLimitResolver,
 )
+from language_navigation.planner_route_tools import (
+    PlannerCache,
+    build_planner_safe_export_positions,
+)
 from language_navigation.geometry import (
     _get_waypoint_positions,
 )
@@ -60,6 +64,7 @@ from language_navigation.route_builder import (
     _rebuild_follow_route,
     _select_output_actions,
     _select_trigger,
+    _truncate_waypoints_before_terminal_junction,
     _waypoint_position,
     Position3D,
 )
@@ -367,7 +372,9 @@ def _build_instruction_steps(
 
     # Speed instruction at the start.
     speed_template = _build_precise_accelerate_instruction(
-        rng, target_speed_ms=accel_target_speed_ms
+        rng,
+        target_speed_ms=accel_target_speed_ms,
+        keep_straight=True,
     )
     instruction_steps.append(
         InstructionStep(
@@ -440,7 +447,9 @@ def _build_route_instructions(
         acceleration_ms2=ASSUMED_ACCELERATION_MS2,
     )
     accelerate_template = _build_precise_accelerate_instruction(
-        rng, target_speed_ms=fitted_speed_ms
+        rng,
+        target_speed_ms=fitted_speed_ms,
+        keep_straight=True,
     )
     _append_instruction(
         instructions_elem,
@@ -555,7 +564,9 @@ def _build_chained_route_instructions(
             acceleration_ms2=ASSUMED_ACCELERATION_MS2,
         )
         accelerate_template = _build_precise_accelerate_instruction(
-            rng, target_speed_ms=fitted_speed_ms
+            rng,
+            target_speed_ms=fitted_speed_ms,
+            keep_straight=True,
         )
         _append_instruction(
             instructions_elem,
@@ -591,6 +602,7 @@ def _build_action_route_tree(
     category: str,
     action: str,
     final_route: RebuiltRoute,
+    exported_positions: Sequence[Position3D],
     accelerate_target_speed_ms: int,
     rng: random.Random,
     force_all_green_traffic_lights: bool,
@@ -623,7 +635,7 @@ def _build_action_route_tree(
         route_attrib["force_all_green_traffic_lights"] = "true"
     target_route = ET.SubElement(root, "route", route_attrib)
 
-    target_route.append(_build_waypoints_element(final_route.positions))
+    target_route.append(_build_waypoints_element(exported_positions))
 
     if instruction_steps is not None:
         target_route.append(_build_instructions_from_steps(instruction_steps))
@@ -653,7 +665,7 @@ def _build_action_route_tree(
         raise ValueError("Must provide either instruction_specs or trigger.")
 
     target_route.append(_build_default_evaluation())
-    target_route.append(_build_default_scenarios_from_positions(final_route.positions))
+    target_route.append(_build_default_scenarios_from_positions(exported_positions))
 
     weathers_elem = src_route.find("weathers")
     if weathers_elem is not None:
@@ -676,6 +688,7 @@ def convert_file(
     route_step_m: float,
     lane_change_prep_m: float,
     map_cache: CarlaMapCache,
+    planner_cache: PlannerCache,
     speed_limit_resolver: OpenDriveSpeedLimitResolver,
     force_all_green_traffic_lights: bool,
     max_chain_depth: int = 5,
@@ -805,6 +818,10 @@ def convert_file(
                     previous_trigger_distance_m=trigger.distance_m,
                     max_depth=max_chain_depth - 1,
                 )
+                if not tail_specs:
+                    tail_waypoints = _truncate_waypoints_before_terminal_junction(
+                        tail_waypoints
+                    )
 
                 action_segment = list(
                     suffix_result.waypoints[1: suffix_result.action_end_index + 1]
@@ -838,6 +855,12 @@ def convert_file(
                 )
 
             final_route = _finalize_route(merged_waypoints, route_step_m, resample=False)
+            exported_positions = build_planner_safe_export_positions(
+                src_route.attrib.get("town", "Town12"),
+                merged_waypoints,
+                planner_cache,
+            )
+
             instruction_steps = _build_instruction_steps(
                 route_rng,
                 instruction_specs=all_specs,
@@ -850,6 +873,7 @@ def convert_file(
                 category=category,
                 action=action,
                 final_route=final_route,
+                exported_positions=exported_positions,
                 accelerate_target_speed_ms=0,
                 rng=route_rng,
                 force_all_green_traffic_lights=force_all_green_traffic_lights,
@@ -878,6 +902,7 @@ def main() -> None:
         None if args.xodr_root is None else [p.expanduser().resolve() for p in args.xodr_root]
     )
     map_cache = CarlaMapCache(xodr_search_roots=xodr_roots)
+    planner_cache = PlannerCache(map_cache)
     speed_limit_resolver = OpenDriveSpeedLimitResolver(xodr_search_roots=xodr_roots)
 
     if not input_path.exists():
@@ -906,6 +931,7 @@ def main() -> None:
             route_step_m=args.route_step_m,
             lane_change_prep_m=args.lane_change_prep_m,
             map_cache=map_cache,
+            planner_cache=planner_cache,
             speed_limit_resolver=speed_limit_resolver,
             force_all_green_traffic_lights=args.force_all_green_traffic_lights,
             max_chain_depth=args.max_chain_depth,
@@ -938,6 +964,7 @@ def main() -> None:
             route_step_m=args.route_step_m,
             lane_change_prep_m=args.lane_change_prep_m,
             map_cache=map_cache,
+            planner_cache=planner_cache,
             speed_limit_resolver=speed_limit_resolver,
             force_all_green_traffic_lights=args.force_all_green_traffic_lights,
             max_chain_depth=args.max_chain_depth,

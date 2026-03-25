@@ -157,6 +157,27 @@ def _append_waypoint_if_new(
     route_waypoints.append(waypoint)
 
 
+def _truncate_waypoints_before_terminal_junction(
+    route_waypoints: Sequence["carla.Waypoint"],
+) -> List["carla.Waypoint"]:
+    """Trim a route that ends inside a junction back to the junction entrance.
+
+    This is intended for terminal follow tails with no further chained
+    instruction. If the route never enters a junction, or starts inside one,
+    the input is returned unchanged.
+    """
+    if not route_waypoints or not route_waypoints[-1].is_junction:
+        return list(route_waypoints)
+
+    first_junction_index = next(
+        (idx for idx, waypoint in enumerate(route_waypoints) if waypoint.is_junction),
+        None,
+    )
+    if first_junction_index is None or first_junction_index <= 0:
+        return list(route_waypoints)
+    return list(route_waypoints[:first_junction_index])
+
+
 # ---------------------------------------------------------------------------
 # Road-following scoring
 # ---------------------------------------------------------------------------
