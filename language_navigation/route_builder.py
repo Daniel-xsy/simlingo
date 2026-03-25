@@ -20,7 +20,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
 
-from language_navigation_dev.geometry import (
+from language_navigation.geometry import (
     _can_change_lane,
     _compute_turn_category,
     _is_same_direction_lane,
@@ -28,10 +28,10 @@ from language_navigation_dev.geometry import (
     _position_at_distance,
     _route_length_m,
 )
-from language_navigation_dev.actionability import (
+from language_navigation.actionability import (
     _build_actionable_navigation_categories,
 )
-from language_navigation_dev.instructions import (
+from language_navigation.instructions import (
     OPTIONAL_LANE_FOLLOW_PROBABILITY,
 )
 
@@ -668,9 +668,9 @@ def _build_waypoints_element(positions: Sequence[Position3D]) -> ET.Element:
             waypoints_elem,
             "position",
             {
-                "x": f"{x:.1f}",
-                "y": f"{y:.1f}",
-                "z": f"{z:.1f}",
+                "x": f"{x:.2f}",
+                "y": f"{y:.2f}",
+                "z": f"{z:.2f}",
             },
         )
     return waypoints_elem

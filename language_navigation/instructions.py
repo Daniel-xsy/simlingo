@@ -13,7 +13,7 @@ import math
 import random
 from typing import Dict, List, Optional, Tuple
 
-from language_navigation_dev.opendrive import OpenDriveSpeedLimitResolver
+from language_navigation.opendrive import OpenDriveSpeedLimitResolver
 
 __all__ = [
     "INSTRUCTION_LIBRARY",

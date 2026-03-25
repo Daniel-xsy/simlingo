@@ -25,14 +25,14 @@ except ImportError as exc:
 else:
     CARLA_IMPORT_ERROR = None
 
-from language_navigation_dev.opendrive import (
+from language_navigation.opendrive import (
     CarlaMapCache,
     OpenDriveSpeedLimitResolver,
 )
-from language_navigation_dev.geometry import (
+from language_navigation.geometry import (
     _get_waypoint_positions,
 )
-from language_navigation_dev.instructions import (
+from language_navigation.instructions import (
     ASSUMED_ACCELERATION_MS2,
     _append_instruction,
     _build_lane_follow_instruction,
@@ -41,11 +41,11 @@ from language_navigation_dev.instructions import (
     _sample_accelerate_speed_ms,
     _sample_navigation_instruction_for_action,
 )
-from language_navigation_dev.xml_builder import (
+from language_navigation.xml_builder import (
     _build_default_evaluation,
     _indent_xml_compat,
 )
-from language_navigation_dev.route_builder import (
+from language_navigation.route_builder import (
     ActionSuffixResult,
     RebuiltActionabilitySample,
     RebuiltRoute,
@@ -837,7 +837,7 @@ def convert_file(
                     phrasing_mode=last.phrasing_mode,
                 )
 
-            final_route = _finalize_route(merged_waypoints, route_step_m, resample=True)
+            final_route = _finalize_route(merged_waypoints, route_step_m, resample=False)
             instruction_steps = _build_instruction_steps(
                 route_rng,
                 instruction_specs=all_specs,

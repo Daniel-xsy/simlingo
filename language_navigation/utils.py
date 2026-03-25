@@ -13,8 +13,8 @@ names.  For new code, import directly from the focused submodules:
     * ``xml_builder`` — XML indent, evaluation, scenarios, route tree
 """
 
-from language_navigation_dev.opendrive import *      # noqa: F401,F403
-from language_navigation_dev.geometry import *       # noqa: F401,F403
-from language_navigation_dev.actionability import *  # noqa: F401,F403
-from language_navigation_dev.instructions import *   # noqa: F401,F403
-from language_navigation_dev.xml_builder import *    # noqa: F401,F403
+from language_navigation.opendrive import *      # noqa: F401,F403
+from language_navigation.geometry import *       # noqa: F401,F403
+from language_navigation.actionability import *  # noqa: F401,F403
+from language_navigation.instructions import *   # noqa: F401,F403
+from language_navigation.xml_builder import *    # noqa: F401,F403

@@ -13,8 +13,8 @@ import math
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional, Tuple
 
-from language_navigation_dev.geometry import _get_waypoint_positions
-from language_navigation_dev.instructions import (
+from language_navigation.geometry import _get_waypoint_positions
+from language_navigation.instructions import (
     ASSUMED_ACCELERATION_MS2,
     INSTRUCTION_LIBRARY,
     _append_instruction,

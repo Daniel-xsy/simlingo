@@ -12,7 +12,7 @@ import random
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Set, Tuple
 
-from language_navigation_dev.geometry import (
+from language_navigation.geometry import (
     _can_change_lane,
     _compute_turn_category,
     _distance,
@@ -23,7 +23,7 @@ from language_navigation_dev.geometry import (
     _route_length_m,
     _same_direction_adjacent_drive_count,
 )
-from language_navigation_dev.instructions import (
+from language_navigation.instructions import (
     INSTRUCTION_LIBRARY,
     _sample_navigation_instruction,
 )
