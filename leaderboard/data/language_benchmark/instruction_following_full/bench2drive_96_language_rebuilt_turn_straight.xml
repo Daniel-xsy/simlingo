@@ -1,0 +1,65 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<routes>
+  <route id="3813_LANG_REBUILT_TURN_STRAIGHT" town="Town13" benchmark_type="language_following" category="instruction_following" disable_bg_vehicle="true" force_all_green_traffic_lights="true">
+    <waypoints>
+      <position x="-3778.10" y="-2851.19" z="163.15" />
+      <position x="-3775.10" y="-2851.19" z="163.10" />
+      <position x="-3772.10" y="-2851.19" z="163.06" />
+      <position x="-3769.10" y="-2851.19" z="163.01" />
+      <position x="-3766.10" y="-2851.20" z="162.96" />
+      <position x="-3763.10" y="-2851.20" z="162.91" />
+      <position x="-3760.10" y="-2851.20" z="162.87" />
+      <position x="-3757.10" y="-2851.20" z="162.82" />
+      <position x="-3754.10" y="-2851.20" z="162.78" />
+      <position x="-3751.10" y="-2851.20" z="162.73" />
+      <position x="-3667.10" y="-2851.23" z="161.57" />
+      <position x="-3664.10" y="-2851.23" z="161.53" />
+      <position x="-3661.10" y="-2851.23" z="161.49" />
+      <position x="-3658.10" y="-2851.23" z="161.45" />
+      <position x="-3655.10" y="-2851.24" z="161.41" />
+      <position x="-3655.10" y="-2854.74" z="161.41" />
+      <position x="-3652.10" y="-2854.74" z="161.38" />
+      <position x="-3649.10" y="-2854.74" z="161.34" />
+    </waypoints>
+    <instructions>
+      <instruction id="1" priority="primary">
+        <trigger type="distance_traveled" value="0.0" />
+        <text>stay straight and reach 15 m/s</text>
+        <command_id>-1</command_id>
+        <expected_behavior type="target_speed" speed_ms="15" tolerance_ms="1.5" />
+        <duration_meters>37.5</duration_meters>
+      </instruction>
+      <instruction id="2" priority="primary">
+        <trigger type="distance_traveled" value="39.0" />
+        <text>keep straight through the crossing in front of you</text>
+        <command_id>3</command_id>
+        <expected_behavior type="turn" direction="straight" />
+        <duration_meters>72.0</duration_meters>
+      </instruction>
+      <instruction id="3" priority="primary">
+        <trigger type="distance_traveled" value="111.0" />
+        <text>enter the left-hand lane</text>
+        <command_id>5</command_id>
+        <expected_behavior type="lane_change" direction="left" />
+        <duration_meters>-1</duration_meters>
+      </instruction>
+    </instructions>
+    <evaluation>
+      <metric type="collision_check">
+        <param name="expect_collision" value="false" />
+      </metric>
+      <metric type="instruction_compliance">
+        <param name="compliance_threshold" value="0.8" />
+      </metric>
+    </evaluation>
+    <scenarios>
+      <scenario name="FreeRide_1" type="FreeRide">
+        <trigger_point x="-3778.1" y="-2851.2" z="163.2" yaw="-0.0" />
+      </scenario>
+    </scenarios>
+    <weathers>
+      <weather cloudiness="5.0" fog_density="50.0" precipitation="0.0" precipitation_deposits="0.0" route_percentage="0" sun_altitude_angle="45.0" sun_azimuth_angle="-1.0" wetness="0.0" wind_intensity="10.0" />
+      <weather cloudiness="5.0" fog_density="50.0" precipitation="0.0" precipitation_deposits="0.0" route_percentage="100" sun_altitude_angle="45.0" sun_azimuth_angle="-1.0" wetness="0.0" wind_intensity="10.0" />
+    </weathers>
+  </route>
+</routes>

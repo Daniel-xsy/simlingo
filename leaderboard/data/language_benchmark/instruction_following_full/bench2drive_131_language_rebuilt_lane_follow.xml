@@ -1,0 +1,53 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<routes>
+  <route id="23687_LANG_REBUILT_LANE_FOLLOW" town="Town12" benchmark_type="language_following" category="instruction_following" disable_bg_vehicle="true" force_all_green_traffic_lights="true">
+    <waypoints>
+      <position x="-2501.11" y="4244.04" z="365.07" />
+      <position x="-2500.68" y="4241.08" z="365.03" />
+      <position x="-2500.23" y="4238.13" z="365.00" />
+      <position x="-2499.78" y="4235.18" z="364.96" />
+      <position x="-2499.32" y="4232.23" z="364.92" />
+      <position x="-2498.85" y="4229.28" z="364.88" />
+      <position x="-2498.38" y="4226.33" z="364.84" />
+      <position x="-2497.90" y="4223.38" z="364.80" />
+      <position x="-2497.41" y="4220.43" z="364.76" />
+      <position x="-2496.91" y="4217.49" z="364.72" />
+      <position x="-2475.93" y="4121.27" z="363.51" />
+      <position x="-2475.16" y="4118.38" z="363.48" />
+      <position x="-2474.38" y="4115.50" z="363.44" />
+    </waypoints>
+    <instructions>
+      <instruction id="1" priority="primary">
+        <trigger type="distance_traveled" value="0.0" />
+        <text>stay straight and reach 27 m/s</text>
+        <command_id>-1</command_id>
+        <expected_behavior type="target_speed" speed_ms="27" tolerance_ms="1.5" />
+        <duration_meters>121.5</duration_meters>
+      </instruction>
+      <instruction id="2" priority="primary">
+        <trigger type="distance_traveled" value="122.4" />
+        <text>hold your lane and continue straight</text>
+        <command_id>4</command_id>
+        <expected_behavior type="lane_follow" />
+        <duration_meters>-1</duration_meters>
+      </instruction>
+    </instructions>
+    <evaluation>
+      <metric type="collision_check">
+        <param name="expect_collision" value="false" />
+      </metric>
+      <metric type="instruction_compliance">
+        <param name="compliance_threshold" value="0.8" />
+      </metric>
+    </evaluation>
+    <scenarios>
+      <scenario name="FreeRide_1" type="FreeRide">
+        <trigger_point x="-2501.1" y="4244.0" z="365.1" yaw="-81.6" />
+      </scenario>
+    </scenarios>
+    <weathers>
+      <weather cloudiness="70.0" fog_density="50.0" precipitation="60.0" precipitation_deposits="60.0" route_percentage="0" sun_altitude_angle="45.0" sun_azimuth_angle="-1.0" wetness="0.0" wind_intensity="60.0" />
+      <weather cloudiness="70.0" fog_density="50.0" precipitation="60.0" precipitation_deposits="60.0" route_percentage="100" sun_altitude_angle="45.0" sun_azimuth_angle="-1.0" wetness="0.0" wind_intensity="60.0" />
+    </weathers>
+  </route>
+</routes>
