@@ -515,6 +515,8 @@ def _append_instruction(
     trigger_distance_m: float,
     template: Dict[str, object],
     duration_meters: float,
+    trigger_position: Optional[Tuple[float, float, float]] = None,
+    trigger_tolerance_m: float = 5.0,
 ) -> None:
     """Append an ``<instruction>`` XML child to *instructions_elem*.
 
@@ -522,8 +524,16 @@ def _append_instruction(
         instructions_elem: Parent ``<instructions>`` ``Element``.
         instruction_id: Sequential integer id for this instruction.
         trigger_distance_m: Cumulative distance at which the instruction fires.
+            Used as the trigger value when *trigger_position* is ``None``.
         template: Dict with ``text``, ``command_id``, ``expected_behavior``.
         duration_meters: Distance the instruction is active (``-1`` = until end).
+        trigger_position: ``(x, y, z)`` world position for
+            ``distance_to_point`` triggers.  When provided, the trigger
+            fires when the ego is within *trigger_tolerance_m* of this
+            point.  When ``None``, a ``distance_traveled`` trigger is
+            emitted instead (used for speed-only instructions).
+        trigger_tolerance_m: Radius in metres for ``distance_to_point``
+            triggers (default ``5.0``).
     """
     import xml.etree.ElementTree as ET
 
@@ -533,11 +543,24 @@ def _append_instruction(
         {"id": str(instruction_id), "priority": "primary"},
     )
 
-    trigger = ET.SubElement(
-        instr,
-        "trigger",
-        {"type": "distance_traveled", "value": f"{trigger_distance_m:.1f}"},
-    )
+    if trigger_position is not None:
+        trigger = ET.SubElement(
+            instr,
+            "trigger",
+            {
+                "type": "distance_to_point",
+                "value": f"{trigger_tolerance_m:.1f}",
+                "x": f"{trigger_position[0]:.2f}",
+                "y": f"{trigger_position[1]:.2f}",
+                "z": f"{trigger_position[2]:.2f}",
+            },
+        )
+    else:
+        trigger = ET.SubElement(
+            instr,
+            "trigger",
+            {"type": "distance_traveled", "value": f"{trigger_distance_m:.1f}"},
+        )
     trigger.text = None
 
     text_elem = ET.SubElement(instr, "text")

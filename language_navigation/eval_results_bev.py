@@ -7,6 +7,7 @@ on a CARLA map with scores, infractions, and instructions in a side panel.
 """
 
 import argparse
+import bisect
 import json
 import math
 import re
@@ -18,6 +19,11 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import matplotlib.pyplot as plt
 import matplotlib.patheffects as pe
 from matplotlib.patches import Polygon
+
+_THIS_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = _THIS_DIR.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 try:
     import carla
@@ -176,6 +182,44 @@ def _segment_positions(
     return [positions[i] for i in _segment_indices(cum_dists, start_m, end_m)]
 
 
+def _position_at_distance(
+    positions: List[Tuple[float, float, float]],
+    cum_dists: List[float],
+    target_m: float,
+) -> Optional[Tuple[float, float, float]]:
+    """Interpolate a position at the requested cumulative distance."""
+    if not positions or not cum_dists:
+        return None
+    if len(positions) == 1:
+        return positions[0]
+
+    bounded = max(0.0, min(target_m, cum_dists[-1]))
+    upper_idx = bisect.bisect_left(cum_dists, bounded)
+
+    if upper_idx <= 0:
+        return positions[0]
+    if upper_idx >= len(cum_dists):
+        return positions[-1]
+
+    prev_idx = upper_idx - 1
+    prev_dist = cum_dists[prev_idx]
+    next_dist = cum_dists[upper_idx]
+
+    if math.isclose(next_dist, bounded, rel_tol=0.0, abs_tol=1e-6):
+        return positions[upper_idx]
+    if next_dist <= prev_dist:
+        return positions[upper_idx]
+
+    weight = (bounded - prev_dist) / (next_dist - prev_dist)
+    prev_pos = positions[prev_idx]
+    next_pos = positions[upper_idx]
+    return (
+        prev_pos[0] + weight * (next_pos[0] - prev_pos[0]),
+        prev_pos[1] + weight * (next_pos[1] - prev_pos[1]),
+        prev_pos[2] + weight * (next_pos[2] - prev_pos[2]),
+    )
+
+
 def _tail_segment_positions(
     positions: List[Tuple[float, float, float]],
     cum_dists: List[float],
@@ -305,8 +349,15 @@ def _compute_instruction_compliance(
                 continue
 
             # L2 distance from instruction-window endpoint to GT instruction-window endpoint.
-            gt_end_pos = gt_segment[-1]
-            traj_end_pos = traj_segment[-1]
+            gt_end_pos = _position_at_distance(gt_positions, gt_cum, gt_segment_end)
+            traj_end_pos = _position_at_distance(trajectory, traj_cum, traj_segment_end)
+            if gt_end_pos is None or traj_end_pos is None:
+                result["passed"] = False
+                result["detail"] = "missing samples at instruction boundary"
+                all_passed = False
+                measurement_stopped = True
+                per_instruction.append(result)
+                continue
             l2 = math.sqrt(
                 (traj_end_pos[0] - gt_end_pos[0]) ** 2
                 + (traj_end_pos[1] - gt_end_pos[1]) ** 2
@@ -424,23 +475,27 @@ def _infer_benchmark_dir(eval_path: Path) -> Optional[Path]:
     """
     eval_path = eval_path.resolve()
 
-    # Find the repo root by looking for leaderboard/ directory
-    repo_root = None
-    for parent in [eval_path] + list(eval_path.parents):
-        if (parent / "leaderboard" / "data" / "language_benchmark").is_dir():
-            repo_root = parent
-            break
-    if repo_root is None:
-        return None
+    benchmark_base_candidates: List[Path] = [
+        _REPO_ROOT / "leaderboard" / "data" / "language_benchmark",
+    ]
+    benchmark_base_candidates.extend(
+        parent / "leaderboard" / "data" / "language_benchmark"
+        for parent in [eval_path] + list(eval_path.parents)
+    )
 
-    benchmark_base = repo_root / "leaderboard" / "data" / "language_benchmark"
+    benchmark_base = next(
+        (candidate for candidate in benchmark_base_candidates if candidate.is_dir()),
+        None,
+    )
+    if benchmark_base is None:
+        return None
 
     # Try to extract benchmark_type from the eval path.
     # Pattern: .../eval_results/LanguageBenchmark/<benchmark_type>/<route_name>/
     # The eval_path could be either the route_name dir or the benchmark_type dir (batch mode).
     parts = eval_path.parts
     for i, part in enumerate(parts):
-        if part == "LanguageBenchmark" and i + 1 < len(parts):
+        if part.startswith("LanguageBenchmark") and i + 1 < len(parts):
             candidate = parts[i + 1]
             candidate_dir = benchmark_base / candidate
             if candidate_dir.is_dir():

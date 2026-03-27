@@ -85,11 +85,15 @@ class InstructionSpec:
         duration_m: Distance the instruction stays active; ``-1`` means
             "until the end of the route".
         phrasing_mode: ``"approach"`` or ``"at_junction"``.
+        trigger_position: World position of the trigger point.  When set,
+            the XML uses a ``distance_to_point`` trigger instead of
+            ``distance_traveled``.
     """
     action: str
     trigger_distance_m: float
     duration_m: float
     phrasing_mode: str
+    trigger_position: Optional[Position3D] = None
 
 
 @dataclass
@@ -100,10 +104,12 @@ class InstructionStep:
         template: Dict with ``text``, ``command_id``, ``expected_behavior``.
         trigger_distance_m: Cumulative trigger distance.
         duration_m: Active duration in metres (``-1`` = until end).
+        trigger_position: World position for ``distance_to_point`` triggers.
     """
     template: Dict[str, object]
     trigger_distance_m: float
     duration_m: float
+    trigger_position: Optional[Position3D] = None
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +319,7 @@ def _build_instruction_chain(
         trigger_distance_m=abs_trigger_distance_m,
         duration_m=trigger_to_action_end_m,
         phrasing_mode=trigger.phrasing_mode,
+        trigger_position=trigger.position,
     )
 
     # Try to recurse if enough remaining distance.
@@ -343,6 +350,7 @@ def _build_instruction_chain(
             trigger_distance_m=current_spec.trigger_distance_m,
             duration_m=-1.0,
             phrasing_mode=current_spec.phrasing_mode,
+            trigger_position=current_spec.trigger_position,
         )
         merged_waypoints = prefix_waypoints
         for wp in suffix_result.waypoints[1:]:
@@ -408,6 +416,7 @@ def _build_instruction_steps(
                 ),
                 trigger_distance_m=spec.trigger_distance_m,
                 duration_m=spec.duration_m,
+                trigger_position=spec.trigger_position,
             )
         )
 
@@ -429,6 +438,7 @@ def _build_instructions_from_steps(
             trigger_distance_m=step.trigger_distance_m,
             template=step.template,
             duration_meters=step.duration_m,
+            trigger_position=step.trigger_position,
         )
     return instructions_elem
 
@@ -468,6 +478,7 @@ def _build_route_instructions(
         trigger_distance_m=trigger.distance_m,
         template=navigation_template,
         duration_meters=-1.0,
+        trigger_position=trigger.position,
     )
     return instructions_elem
 
@@ -516,6 +527,7 @@ def _build_chained_route_instructions(
             trigger_distance_m=first_spec.trigger_distance_m,
             template=nav_template,
             duration_meters=first_spec.duration_m,
+            trigger_position=first_spec.trigger_position,
         )
         next_id += 1
 
@@ -554,6 +566,7 @@ def _build_chained_route_instructions(
                 trigger_distance_m=spec.trigger_distance_m,
                 template=nav_template,
                 duration_meters=spec.duration_m,
+                trigger_position=spec.trigger_position,
             )
             next_id += 1
     else:
@@ -587,6 +600,7 @@ def _build_chained_route_instructions(
                 trigger_distance_m=spec.trigger_distance_m,
                 template=nav_template,
                 duration_meters=spec.duration_m,
+                trigger_position=spec.trigger_position,
             )
             next_id += 1
 
@@ -801,6 +815,7 @@ def convert_file(
                 trigger_distance_m=trigger.distance_m,
                 duration_m=first_trigger_to_action_end_m,
                 phrasing_mode=trigger.phrasing_mode,
+                trigger_position=trigger.position,
             )
 
             # Build instruction chain from action end.
@@ -841,6 +856,7 @@ def convert_file(
                     trigger_distance_m=trigger.distance_m,
                     duration_m=-1.0,
                     phrasing_mode=trigger.phrasing_mode,
+                    trigger_position=trigger.position,
                 )
                 all_specs = [first_spec]
 
@@ -852,6 +868,7 @@ def convert_file(
                     trigger_distance_m=last.trigger_distance_m,
                     duration_m=-1.0,
                     phrasing_mode=last.phrasing_mode,
+                    trigger_position=last.trigger_position,
                 )
 
             final_route = _finalize_route(merged_waypoints, route_step_m, resample=False)

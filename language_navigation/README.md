@@ -15,21 +15,25 @@ Recommended workflow:
 ```bash
 bash language_navigation/create_data.sh
 ```
+This wrapper is cwd-independent: you can run it from the repo root or from
+inside `language_navigation/`. It also defaults `CARLA_ROOT` to
+`/home/nvidia/software/carla0915` and falls back to `conda run -n simlingo`
+when the current Python cannot import `carla`.
 
 2. Verify the generated XMLs with the same `trace_route()` logic used by evaluation:
 ```bash
 export CARLA_ROOT=/home/nvidia/software/carla0915
 export PYTHONPATH=$CARLA_ROOT/PythonAPI/carla:$CARLA_ROOT/PythonAPI/carla/dist/carla-0.9.15-py3.7-linux-x86_64.egg:$PYTHONPATH
 python language_navigation/verify_planner_routes.py \
-  leaderboard/data/language_benchmark/instruction_following_v0.15
+  leaderboard/data/language_benchmark/instruction_following_full
 ```
 
-3. Compare two benchmark versions offline:
+3. Compare two benchmark directories offline:
 ```bash
 python language_navigation/verify_planner_routes.py \
-  leaderboard/data/language_benchmark/instruction_following_v0.14 \
-  --compare-dir leaderboard/data/language_benchmark/instruction_following_v0.15 \
-  --output-json /tmp/v014_v015_route_compare.json
+  leaderboard/data/language_benchmark/instruction_following \
+  --compare-dir leaderboard/data/language_benchmark/instruction_following_full \
+  --output-json /tmp/instruction_following_compare.json
 ```
 
 ## Main Scripts
@@ -40,7 +44,7 @@ python language_navigation/verify_planner_routes.py \
   Main generator for instruction-following benchmark XMLs. It rebuilds a CARLA waypoint route from the Bench2Drive start, samples a trigger, executes one or more actions, constructs instructions, and writes the final XML.
 
 - [`create_data.sh`](/home/nvidia/vla-project/simlingo/language_navigation/create_data.sh)
-  Convenience wrapper for full benchmark generation. It currently builds `instruction_following_v0.15`, creates `selected` and `subset` copies, and generates XML-only BEV debug figures.
+  Convenience wrapper for benchmark generation. It resolves repository/CARLA paths relative to the script so it can be run from any working directory. The wrapper still uses an internal `VERSION` variable for generation output naming, but the current official instruction-following datasets are maintained in the unversioned directories `instruction_following`, `instruction_following_full`, and `instruction_following_mini`.
 
 - [`generate_safety_critical_xml.py`](/home/nvidia/vla-project/simlingo/language_navigation/generate_safety_critical_xml.py)
   Generator for safety-critical benchmark XMLs. Unlike instruction-following generation, it keeps the original Bench2Drive route and injects dangerous instructions that intentionally conflict with the scenario.
@@ -95,10 +99,10 @@ python language_navigation/verify_planner_routes.py \
 - [`route_subset.txt`](/home/nvidia/vla-project/simlingo/language_navigation/route_subset.txt)
   The smaller curated list used for the `subset` split.
 
-### Legacy / compatibility helpers
+### Helper modules
 
 - [`utils.py`](/home/nvidia/vla-project/simlingo/language_navigation/utils.py)
-  Older shared helpers still used by some visualization scripts. New planner-safe generation logic is centered in `route_builder.py`, `opendrive.py`, and `planner_route_tools.py`.
+  Shared helper functions that remain available for visualization and compatibility paths. The current planner-safe generation logic is centered in `route_builder.py`, `opendrive.py`, and `planner_route_tools.py`.
 
 ## XML Generation Logic
 
