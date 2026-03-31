@@ -291,11 +291,15 @@ class LanguageBenchmarkAgent(LingoAgent):
                 is_triggered = self.distance_traveled >= trigger.value
                 
             elif trigger.trigger_type == TriggerType.DISTANCE_TO_POINT:
-                dist = math.sqrt(
-                    (current_location.x - trigger.point_x) ** 2 +
-                    (current_location.y - trigger.point_y) ** 2
-                )
-                is_triggered = dist <= trigger.value
+                if instruction.is_active:
+                    # Latch: once triggered, stay active until duration expires.
+                    is_triggered = True
+                else:
+                    dist = math.sqrt(
+                        (current_location.x - trigger.point_x) ** 2 +
+                        (current_location.y - trigger.point_y) ** 2
+                    )
+                    is_triggered = dist <= trigger.value
                 
             elif trigger.trigger_type == TriggerType.TIME_ELAPSED:
                 if self.start_time is not None:
