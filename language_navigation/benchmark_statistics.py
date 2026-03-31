@@ -153,7 +153,7 @@ def plot_action_distribution(routes: list, output_dir: Path):
 
     ax.set_ylim(0, max(counts) * 1.15 if counts else 1)
     fig.tight_layout()
-    out_path = output_dir / "action_category_distribution.png"
+    out_path = output_dir / "action_category_distribution.pdf"
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {out_path}")
@@ -200,7 +200,7 @@ def plot_speed_distribution(routes: list, output_dir: Path):
 
     ax.set_ylim(0, max(speed_counts) * 1.15)
     fig.tight_layout()
-    out_path = output_dir / "speed_distribution.png"
+    out_path = output_dir / "speed_distribution.pdf"
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {out_path}")
@@ -251,7 +251,7 @@ def plot_duration_distribution(routes: list, output_dir: Path):
     ax2.set_title("Finite vs Open-ended", fontsize=14)
 
     fig.tight_layout()
-    out_path = output_dir / "duration_distribution.png"
+    out_path = output_dir / "duration_distribution.pdf"
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {out_path}")
@@ -384,7 +384,7 @@ def plot_waypoint_distribution(routes: list, output_dir: Path, window_size: int 
     ax.grid(True, alpha=0.3)
 
     fig.tight_layout()
-    out_path = output_dir / "waypoint_distribution.png"
+    out_path = output_dir / "waypoint_distribution.pdf"
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {out_path}")

@@ -1001,9 +1001,14 @@ def parse_args() -> argparse.Namespace:
         help="OpenDRIVE maps root directory (can be specified multiple times).",
     )
     parser.add_argument(
+        "--vis",
+        action="store_true",
+        help="Generate and save BEV visualization images. Off by default.",
+    )
+    parser.add_argument(
         "--show",
         action="store_true",
-        help="Open an interactive matplotlib window.",
+        help="Open an interactive matplotlib window (implies --vis).",
     )
     parser.add_argument(
         "--dpi",
@@ -1024,6 +1029,7 @@ def _process_single_eval(
     dpi: int,
     show: bool,
     render: bool,
+    visualize: bool = True,
 ) -> Optional[Dict[str, Any]]:
     route_name = eval_dir.name
     results = _load_results_json(eval_dir)
@@ -1077,22 +1083,23 @@ def _process_single_eval(
         )
 
     output_path = (output_dir / f"{route_name}_eval_bev.png").resolve()
-    _plot_eval_figure(
-        output_path=output_path,
-        route_name=route_name,
-        gt_positions=gt_positions,
-        trajectory=trajectory,
-        results=results,
-        instructions=instructions,
-        town=town,
-        map_cache=map_cache,
-        map_waypoint_step=map_waypoint_step,
-        margin_m=margin_m,
-        dpi=dpi,
-        show=show,
-        render=render,
-        compliance=compliance,
-    )
+    if visualize:
+        _plot_eval_figure(
+            output_path=output_path,
+            route_name=route_name,
+            gt_positions=gt_positions,
+            trajectory=trajectory,
+            results=results,
+            instructions=instructions,
+            town=town,
+            map_cache=map_cache,
+            map_waypoint_step=map_waypoint_step,
+            margin_m=margin_m,
+            dpi=dpi,
+            show=show,
+            render=render,
+            compliance=compliance,
+        )
 
     score_str = ""
     if results is not None:
@@ -1106,7 +1113,10 @@ def _process_single_eval(
     if compliance is not None:
         label = "PASS" if compliance["instruction_success"] else "FAIL"
         compliance_str = f" | compliance={label} ({compliance['num_passed']}/{compliance['num_checked']})"
-    print(f"Saved: {output_path}{score_str}{compliance_str}")
+    if visualize:
+        print(f"Saved: {output_path}{score_str}{compliance_str}")
+    else:
+        print(f"Processed: {route_name}{score_str}{compliance_str}")
 
     return compliance
 
@@ -1139,6 +1149,8 @@ def main() -> None:
             else:
                 print("[WARN] No --benchmark-dir provided and auto-detection failed. GT route will not be shown.")
 
+    if args.show:
+        args.vis = True
     render = not args.no_render
     output_dir = Path("debug/eval_bev") if args.output is None else args.output
     output_dir = output_dir.resolve()
@@ -1157,6 +1169,7 @@ def main() -> None:
             dpi=args.dpi,
             show=args.show,
             render=render,
+            visualize=args.vis,
         )
         return
 
@@ -1187,6 +1200,7 @@ def main() -> None:
                 dpi=args.dpi,
                 show=False,
                 render=render,
+                visualize=args.vis,
             )
             if compliance is not None:
                 compliance_results[eval_dir.name] = compliance
@@ -1217,12 +1231,58 @@ def main() -> None:
         print(f"{'instruction_success_rate':<55} {rate:>7.1%}")
         print(f"  ({total_success}/{total_checked} routes passed)")
 
+        # Per-category breakdown
+        _CATEGORY_LABELS = {
+            ("turn", "left"): "Turn Left",
+            ("turn", "right"): "Turn Right",
+            ("turn", "straight"): "Go Straight",
+            ("lane_change", "left"): "Lane Change Left",
+            ("lane_change", "right"): "Lane Change Right",
+            ("lane_follow", ""): "Lane Follow",
+        }
+        category_stats: Dict[str, Dict[str, int]] = {}  # label -> {passed, total}
+        for comp in compliance_results.values():
+            for instr in comp.get("per_instruction", []):
+                btype = instr.get("behavior_type", "")
+                direction = instr.get("direction", "")
+                label = _CATEGORY_LABELS.get((btype, direction), f"{btype} {direction}".strip())
+                if label not in category_stats:
+                    category_stats[label] = {"passed": 0, "total": 0}
+                category_stats[label]["total"] += 1
+                if instr.get("passed", False):
+                    category_stats[label]["passed"] += 1
+
+        if category_stats:
+            print(f"\n{'='*70}")
+            print("Per-Category Instruction Compliance")
+            print(f"{'='*70}")
+            print(f"{'Category':<30} {'Passed':>8} {'Total':>8} {'Rate':>8}")
+            print(f"{'-'*30} {'-'*8} {'-'*8} {'-'*8}")
+            all_passed = 0
+            all_total = 0
+            for cat_label in sorted(category_stats.keys()):
+                s = category_stats[cat_label]
+                cat_rate = s["passed"] / s["total"] if s["total"] > 0 else 0.0
+                print(f"{cat_label:<30} {s['passed']:>8} {s['total']:>8} {cat_rate:>7.1%}")
+                all_passed += s["passed"]
+                all_total += s["total"]
+            print(f"{'-'*30} {'-'*8} {'-'*8} {'-'*8}")
+            overall_rate = all_passed / all_total if all_total > 0 else 0.0
+            print(f"{'Overall':<30} {all_passed:>8} {all_total:>8} {overall_rate:>7.1%}")
+
+        per_category_json = {
+            label: {"passed": s["passed"], "total": s["total"],
+                    "rate": s["passed"] / s["total"] if s["total"] > 0 else 0.0}
+            for label, s in sorted(category_stats.items())
+        }
+
         # Save to JSON
         output_json = output_dir / "compliance_results.json"
         summary = {
             "instruction_success_rate": rate,
             "total_routes": total_checked,
             "total_passed": total_success,
+            "per_category": per_category_json,
             "per_route": compliance_results,
         }
         output_json.parent.mkdir(parents=True, exist_ok=True)
